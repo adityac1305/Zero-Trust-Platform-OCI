@@ -1,0 +1,80 @@
+########################################
+# Terraform / OpenTofu
+########################################
+
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+
+*.tfplan
+
+########################################
+# OpenTofu specific
+########################################
+
+.tofu/
+tofu.tfstate*
+tofu.plan
+
+########################################
+# Variable files (IMPORTANT - secrets risk)
+########################################
+
+*.tfvars
+*.tfvars.json
+
+# allow example files
+!example.tfvars
+!*.example.tfvars
+
+########################################
+# CLI config / credentials
+########################################
+
+*.pem
+*.key
+*.pub
+*.p12
+*.pfx
+
+*.oci
+oci_api_key*
+~/.oci/
+
+########################################
+# Environment files
+########################################
+
+.env
+.env.*
+!.env.example
+
+########################################
+# Logs
+########################################
+
+*.log
+
+########################################
+# OS / Editor noise
+########################################
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+
+########################################
+# Script temp files
+########################################
+
+*.bak
+*.swp
+*.tmp
