@@ -1,0 +1,524 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.gitignore
+environments/lab/main.tf
+environments/lab/outputs.tf
+environments/lab/providers.tf
+environments/lab/variables.tf
+environments/lab/versions.tf
+repo_structure.txt
+scripts/apply.sh
+scripts/destroy.sh
+scripts/init.sh
+scripts/plan.sh
+scripts/retry-apply.sh
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="environments/lab/versions.tf">
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    oci = {
+      source  = "oracle/oci"
+      version = ">= 5.0.0"
+    }
+  }
+}
+</file>
+
+<file path="repo_structure.txt">
+Folder PATH listing for volume Data
+Volume serial number is 0000008A C87A:83A4
+D:.
+|   .gitignore
+|   repomix-output.xml
+|   repo_structure.txt
+|   versions.tf
+|   
++---.github
+|   \---workflows
++---bootstrap
++---environments
+|   +---dev
+|   \---lab
+|           main.tf
+|           outputs.tf
+|           providers.tf
+|           terraform.tfvars
+|           variables.tf
+|           
++---global
++---modules
++---policies
+\---scripts
+        apply.sh
+        destroy.sh
+        init.sh
+        plan.sh
+</file>
+
+<file path="scripts/retry-apply.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+while true; do
+  echo "======================================"
+  echo "Running tofu apply at $(date)"
+  echo "======================================"
+
+  cd "environments/${ENVIRONMENT}"
+
+  tofu apply -auto-approve "${ENVIRONMENT}.tfplan" && break
+
+  echo ""
+  echo "Apply failed. Retrying in 5 minutes..."
+  echo ""
+
+  cd ../..
+
+  sleep 300
+done
+
+echo ""
+echo "Infrastructure applied successfully."
+</file>
+
+<file path=".gitignore">
+########################################
+# Terraform / OpenTofu
+########################################
+
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+
+*.tfplan
+
+########################################
+# OpenTofu specific
+########################################
+
+.tofu/
+tofu.tfstate*
+tofu.plan
+
+########################################
+# Variable files (IMPORTANT - secrets risk)
+########################################
+
+*.tfvars
+*.tfvars.json
+
+# allow example files
+!example.tfvars
+!*.example.tfvars
+
+########################################
+# CLI config / credentials
+########################################
+
+*.pem
+*.key
+*.pub
+*.p12
+*.pfx
+
+*.oci
+oci_api_key*
+~/.oci/
+
+########################################
+# Environment files
+########################################
+
+.env
+.env.*
+!.env.example
+
+########################################
+# Logs
+########################################
+
+*.log
+
+########################################
+# OS / Editor noise
+########################################
+
+.DS_Store
+Thumbs.db
+
+.vscode/
+.idea/
+
+########################################
+# Script temp files
+########################################
+
+*.bak
+*.swp
+*.tmp
+</file>
+
+<file path="environments/lab/main.tf">
+############################################
+# AVAILABILITY DOMAINS
+############################################
+data "oci_identity_availability_domains" "ads" {
+  compartment_id = var.tenancy_ocid
+}
+
+############################################
+# UBUNTU IMAGE (ARM)
+############################################
+data "oci_core_images" "ubuntu" {
+  compartment_id           = var.compartment_ocid
+  operating_system         = "Canonical Ubuntu"
+  operating_system_version = "22.04"
+  shape                    = "VM.Standard.A1.Flex"
+
+  sort_by    = "TIMECREATED"
+  sort_order = "DESC"
+
+  filter {
+    name   = "display_name"
+    values = [".*aarch64.*"]
+    regex  = true
+  }
+}
+
+############################################
+# VCN
+############################################
+resource "oci_core_vcn" "lab_vcn" {
+  compartment_id = var.compartment_ocid
+  cidr_block     = var.vcn_cidr
+  display_name   = "adityac1305-vcn"
+  dns_label      = "labvcn"
+}
+
+############################################
+# INTERNET GATEWAY
+############################################
+resource "oci_core_internet_gateway" "igw" {
+  compartment_id = var.compartment_ocid
+  vcn_id         = oci_core_vcn.lab_vcn.id
+  display_name   = "adityac1305-igw"
+  enabled        = true
+}
+
+############################################
+# ROUTE TABLE
+############################################
+resource "oci_core_route_table" "rt" {
+  compartment_id = var.compartment_ocid
+  vcn_id         = oci_core_vcn.lab_vcn.id
+
+  route_rules {
+    destination       = "0.0.0.0/0"
+    destination_type  = "CIDR_BLOCK"
+    network_entity_id = oci_core_internet_gateway.igw.id
+  }
+}
+
+############################################
+# SECURITY LIST
+############################################
+resource "oci_core_security_list" "sl" {
+  compartment_id = var.compartment_ocid
+  vcn_id         = oci_core_vcn.lab_vcn.id
+
+  # SSH
+  ingress_security_rules {
+    protocol = "6" # TCP
+    source   = "0.0.0.0/0"
+    tcp_options {
+      min = 22
+      max = 22
+    }
+  }
+
+  # HTTP
+  ingress_security_rules {
+    protocol = "6" # TCP
+    source   = "0.0.0.0/0"
+    tcp_options {
+      min = 80
+      max = 80
+    }
+  }
+
+  # Essential ICMP for Path MTU Discovery
+  ingress_security_rules {
+    protocol = "1" # ICMP
+    source   = "0.0.0.0/0"
+    icmp_options {
+      type = 3
+      code = 4
+    }
+  }
+
+  # ICMP for Ping
+  ingress_security_rules {
+    protocol = "1" # ICMP
+    source   = "0.0.0.0/0"
+    icmp_options {
+      type = 8
+    }
+  }
+
+  egress_security_rules {
+    protocol    = "all"
+    destination = "0.0.0.0/0"
+  }
+}
+
+############################################
+# SUBNET
+############################################
+resource "oci_core_subnet" "public_subnet" {
+  compartment_id    = var.compartment_ocid
+  vcn_id            = oci_core_vcn.lab_vcn.id
+  cidr_block        = var.subnet_cidr
+  display_name      = "adityac1305-public-subnet"
+
+  route_table_id    = oci_core_route_table.rt.id
+  security_list_ids = [oci_core_security_list.sl.id]
+
+  prohibit_public_ip_on_vnic = false
+}
+
+############################################
+# COMPUTE INSTANCE
+############################################
+resource "oci_core_instance" "vm" {
+  compartment_id      = var.compartment_ocid
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[1].name
+
+  display_name = "adityac1305-lab"
+  shape        = "VM.Standard.A1.Flex"
+
+  shape_config {
+    ocpus         = 4
+    memory_in_gbs = 24
+  }
+
+  create_vnic_details {
+    subnet_id        = oci_core_subnet.public_subnet.id
+    assign_public_ip = false
+  }
+
+  source_details {
+    source_type = "image"
+    source_id   = data.oci_core_images.ubuntu.images[0].id
+  }
+
+  metadata = {
+    ssh_authorized_keys = var.ssh_public_key
+  }
+}
+
+############################################
+# VNIC & PRIVATE IP LOOKUP
+############################################
+data "oci_core_vnic_attachments" "vm_vnic_attach" {
+  compartment_id = var.compartment_ocid
+  instance_id    = oci_core_instance.vm.id
+  depends_on     = [oci_core_instance.vm]
+}
+
+data "oci_core_private_ips" "vm_private_ips" {
+  vnic_id    = data.oci_core_vnic_attachments.vm_vnic_attach.vnic_attachments[0].vnic_id
+  depends_on = [data.oci_core_vnic_attachments.vm_vnic_attach]
+}
+
+############################################
+# RESERVED PUBLIC IP & ASSOCIATION
+############################################
+resource "oci_core_public_ip" "reserved_ip" {
+  compartment_id = var.compartment_ocid
+  lifetime       = "RESERVED"
+  display_name   = "ace1305-lab-reserved-ip"
+  private_ip_id  = data.oci_core_private_ips.vm_private_ips.private_ips[0].id
+}
+</file>
+
+<file path="environments/lab/outputs.tf">
+output "instance_id" {
+  value = oci_core_instance.vm.id
+}
+
+output "private_ip" {
+  value = oci_core_instance.vm.private_ip
+}
+
+output "public_ip" {
+  value = oci_core_public_ip.reserved_ip.ip_address
+}
+
+output "vcn_id" {
+  value = oci_core_vcn.lab_vcn.id
+}
+</file>
+
+<file path="environments/lab/providers.tf">
+provider "oci" {
+  tenancy_ocid     = var.tenancy_ocid
+  user_ocid        = var.user_ocid
+  fingerprint      = var.fingerprint
+  private_key_path = var.private_key_path
+  region           = var.region
+}
+</file>
+
+<file path="environments/lab/variables.tf">
+variable "tenancy_ocid" {
+  type        = string
+  description = "The tenancy OCID"
+}
+
+variable "user_ocid" {
+  type        = string
+  description = "The user OCID"
+}
+
+variable "fingerprint" {
+  type        = string
+  description = "The key fingerprint"
+}
+
+variable "private_key_path" {
+  type        = string
+  description = "Path to the private key"
+}
+
+variable "region" {
+  type        = string
+  description = "The OCI region"
+}
+
+variable "compartment_ocid" {
+  type        = string
+  description = "The compartment OCID where resources will be created"
+}
+
+variable "vcn_cidr" {
+  type        = string
+  default     = "10.0.0.0/16"
+  description = "CIDR block for the VCN"
+}
+
+variable "subnet_cidr" {
+  type        = string
+  default     = "10.0.0.0/24"
+  description = "CIDR block for the public subnet"
+}
+
+variable "ssh_public_key" {
+  type        = string
+  description = "Public SSH key for the compute instance"
+}
+</file>
+
+<file path="scripts/apply.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "environments/${ENVIRONMENT}"
+
+tofu apply "${ENVIRONMENT}.tfplan"
+</file>
+
+<file path="scripts/destroy.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "environments/${ENVIRONMENT}"
+
+tofu destroy
+</file>
+
+<file path="scripts/init.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "environments/${ENVIRONMENT}"
+
+tofu init
+</file>
+
+<file path="scripts/plan.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "environments/${ENVIRONMENT}"
+
+tofu plan -out="${ENVIRONMENT}.tfplan"
+</file>
+
+</files>
