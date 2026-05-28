@@ -9,7 +9,7 @@ while true; do
   echo "Running tofu apply at $(date)"
   echo "======================================"
 
-  cd "environments/${ENVIRONMENT}"
+  cd "opentofu/environments/${ENVIRONMENT}"
 
   tofu apply -auto-approve "${ENVIRONMENT}.tfplan" && break
 
@@ -17,7 +17,7 @@ while true; do
   echo "Apply failed. Retrying in 5 minutes..."
   echo ""
 
-  cd ../..
+  cd ../../..
 
   sleep 300
 done

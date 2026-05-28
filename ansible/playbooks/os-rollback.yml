@@ -1,0 +1,17 @@
+---
+
+- name: OS Rollback
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Restore sshd config
+      copy:
+        src: /root/backup/sshd_config
+        dest: /etc/ssh/sshd_config
+        remote_src: true
+
+    - name: Restart ssh
+      service:
+        name: ssh
+        state: restarted

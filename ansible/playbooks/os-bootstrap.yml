@@ -1,0 +1,8 @@
+---
+
+- name: OS Bootstrap
+  hosts: all
+  become: true
+
+  roles:
+    - os-bootstrap

@@ -41,23 +41,422 @@ The content is organized as follows:
 
 <directory_structure>
 .gitignore
-environments/lab/main.tf
-environments/lab/outputs.tf
-environments/lab/providers.tf
-environments/lab/variables.tf
-environments/lab/versions.tf
+ansible/ansible.cfg
+ansible/inventories/dev/group_vars/all.yml
+ansible/inventories/dev/hosts.ini
+ansible/inventories/lab/group_vars/all.yml
+ansible/inventories/lab/hosts.ini
+ansible/playbooks/bootstrap.yml
+ansible/playbooks/cert-manager.yml
+ansible/playbooks/common.yml
+ansible/playbooks/ingress-nginx.yml
+ansible/playbooks/k3s-bootstrap.yml
+ansible/playbooks/k3s-install.yml
+ansible/playbooks/keycloak.yml
+ansible/playbooks/monitoring.yml
+ansible/playbooks/oauth2-proxy.yml
+ansible/playbooks/vault.yml
+ansible/requirements.yml
+ansible/scripts/bootstrap-kubeconfig.sh
+ansible/scripts/generate-inventory.sh
+ansible/scripts/wait-for-ssh.sh
+opentofu/environments/lab/main.tf
+opentofu/environments/lab/outputs.tf
+opentofu/environments/lab/providers.tf
+opentofu/environments/lab/variables.tf
+opentofu/environments/lab/versions.tf
+opentofu/scripts/apply.sh
+opentofu/scripts/destroy.sh
+opentofu/scripts/init.sh
+opentofu/scripts/plan.sh
+opentofu/scripts/retry-apply.sh
 repo_structure.txt
-scripts/apply.sh
-scripts/destroy.sh
-scripts/init.sh
-scripts/plan.sh
-scripts/retry-apply.sh
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
 
-<file path="environments/lab/versions.tf">
+<file path="ansible/ansible.cfg">
+
+</file>
+
+<file path="ansible/inventories/dev/group_vars/all.yml">
+
+</file>
+
+<file path="ansible/inventories/dev/hosts.ini">
+
+</file>
+
+<file path="ansible/inventories/lab/group_vars/all.yml">
+
+</file>
+
+<file path="ansible/inventories/lab/hosts.ini">
+
+</file>
+
+<file path="ansible/playbooks/bootstrap.yml">
+
+</file>
+
+<file path="ansible/playbooks/cert-manager.yml">
+
+</file>
+
+<file path="ansible/playbooks/common.yml">
+
+</file>
+
+<file path="ansible/playbooks/ingress-nginx.yml">
+
+</file>
+
+<file path="ansible/playbooks/k3s-bootstrap.yml">
+
+</file>
+
+<file path="ansible/playbooks/k3s-install.yml">
+
+</file>
+
+<file path="ansible/playbooks/keycloak.yml">
+
+</file>
+
+<file path="ansible/playbooks/monitoring.yml">
+
+</file>
+
+<file path="ansible/playbooks/oauth2-proxy.yml">
+
+</file>
+
+<file path="ansible/playbooks/vault.yml">
+
+</file>
+
+<file path="ansible/requirements.yml">
+
+</file>
+
+<file path="ansible/scripts/bootstrap-kubeconfig.sh">
+#!/usr/bin/env bash
+</file>
+
+<file path="ansible/scripts/generate-inventory.sh">
+#!/usr/bin/env bash
+</file>
+
+<file path="ansible/scripts/wait-for-ssh.sh">
+#!/usr/bin/env bash
+</file>
+
+<file path="opentofu/environments/lab/main.tf">
+############################################
+# AVAILABILITY DOMAINS
+############################################
+data "oci_identity_availability_domains" "ads" {
+  compartment_id = var.tenancy_ocid
+}
+
+############################################
+# UBUNTU IMAGE (ARM64)
+############################################
+data "oci_core_images" "ubuntu" {
+  compartment_id           = var.compartment_ocid
+  operating_system         = "Canonical Ubuntu"
+  operating_system_version = "22.04"
+  shape                    = "VM.Standard.A1.Flex"
+
+  sort_by    = "TIMECREATED"
+  sort_order = "DESC"
+
+  filter {
+    name   = "display_name"
+    values = [".*aarch64.*"]
+    regex  = true
+  }
+}
+
+############################################
+# VCN
+############################################
+resource "oci_core_vcn" "lab_vcn" {
+  compartment_id = var.compartment_ocid
+  cidr_block     = var.vcn_cidr
+
+  display_name = "adityac1305-vcn"
+  dns_label    = "labvcn"
+}
+
+############################################
+# INTERNET GATEWAY
+############################################
+resource "oci_core_internet_gateway" "igw" {
+  compartment_id = var.compartment_ocid
+  vcn_id         = oci_core_vcn.lab_vcn.id
+
+  display_name = "adityac1305-igw"
+  enabled      = true
+}
+
+############################################
+# ROUTE TABLE
+############################################
+resource "oci_core_route_table" "rt" {
+  compartment_id = var.compartment_ocid
+  vcn_id         = oci_core_vcn.lab_vcn.id
+
+  display_name = "adityac1305-public-rt"
+
+  route_rules {
+    destination       = "0.0.0.0/0"
+    destination_type  = "CIDR_BLOCK"
+    network_entity_id = oci_core_internet_gateway.igw.id
+  }
+}
+
+############################################
+# UPDATE DEFAULT SECURITY LIST
+############################################
+resource "oci_core_default_security_list" "default_sl" {
+  manage_default_resource_id = oci_core_vcn.lab_vcn.default_security_list_id
+
+  ##########################################
+  # INGRESS RULES
+  ##########################################
+
+  # SSH
+  ingress_security_rules {
+    protocol = "6"
+    source   = "0.0.0.0/0"
+
+    tcp_options {
+      min = 22
+      max = 22
+    }
+  }
+
+  # HTTP
+  ingress_security_rules {
+    protocol = "6"
+    source   = "0.0.0.0/0"
+
+    tcp_options {
+      min = 80
+      max = 80
+    }
+  }
+
+  # HTTPS
+  ingress_security_rules {
+    protocol = "6"
+    source   = "0.0.0.0/0"
+
+    tcp_options {
+      min = 443
+      max = 443
+    }
+  }
+
+  # ICMP - Path MTU Discovery
+  ingress_security_rules {
+    protocol = "1"
+    source   = "0.0.0.0/0"
+
+    icmp_options {
+      type = 3
+      code = 4
+    }
+  }
+
+  # ICMP - Internal Destination Unreachable
+  ingress_security_rules {
+    protocol = "1"
+    source   = var.vcn_cidr
+
+    icmp_options {
+      type = 3
+    }
+  }
+
+  ##########################################
+  # EGRESS RULES
+  ##########################################
+  egress_security_rules {
+    protocol    = "all"
+    destination = "0.0.0.0/0"
+  }
+}
+
+############################################
+# PUBLIC SUBNET
+############################################
+resource "oci_core_subnet" "public_subnet" {
+  compartment_id = var.compartment_ocid
+  vcn_id         = oci_core_vcn.lab_vcn.id
+
+  cidr_block  = var.subnet_cidr
+  display_name = "adityac1305-public-subnet"
+
+  route_table_id = oci_core_route_table.rt.id
+
+  # Use DEFAULT security list
+  security_list_ids = [
+    oci_core_vcn.lab_vcn.default_security_list_id
+  ]
+
+  prohibit_public_ip_on_vnic = false
+}
+
+############################################
+# COMPUTE INSTANCE
+############################################
+resource "oci_core_instance" "vm" {
+  compartment_id = var.compartment_ocid
+
+  # Try AD-1 first
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+
+  display_name = "adityac1305-lab"
+
+  shape = "VM.Standard.A1.Flex"
+
+  shape_config {
+    ocpus         = 4
+    memory_in_gbs = 24
+  }
+
+  create_vnic_details {
+    subnet_id        = oci_core_subnet.public_subnet.id
+    assign_public_ip = false
+  }
+
+  source_details {
+    source_type = "image"
+    source_id   = data.oci_core_images.ubuntu.images[0].id
+  }
+
+  metadata = {
+    ssh_authorized_keys = var.ssh_public_key
+  }
+}
+
+############################################
+# VNIC ATTACHMENTS
+############################################
+data "oci_core_vnic_attachments" "vm_vnic_attach" {
+  compartment_id = var.compartment_ocid
+  instance_id    = oci_core_instance.vm.id
+
+  depends_on = [
+    oci_core_instance.vm
+  ]
+}
+
+############################################
+# PRIVATE IP LOOKUP
+############################################
+data "oci_core_private_ips" "vm_private_ips" {
+  vnic_id = data.oci_core_vnic_attachments.vm_vnic_attach.vnic_attachments[0].vnic_id
+
+  depends_on = [
+    data.oci_core_vnic_attachments.vm_vnic_attach
+  ]
+}
+
+############################################
+# RESERVED PUBLIC IP
+############################################
+resource "oci_core_public_ip" "reserved_ip" {
+  compartment_id = var.compartment_ocid
+
+  display_name = "adityac1305-lab-reserved-ip"
+
+  lifetime      = "RESERVED"
+  private_ip_id = data.oci_core_private_ips.vm_private_ips.private_ips[0].id
+}
+</file>
+
+<file path="opentofu/environments/lab/outputs.tf">
+output "instance_id" {
+  value = oci_core_instance.vm.id
+}
+
+output "private_ip" {
+  value = oci_core_instance.vm.private_ip
+}
+
+output "public_ip" {
+  value = oci_core_public_ip.reserved_ip.ip_address
+}
+
+output "vcn_id" {
+  value = oci_core_vcn.lab_vcn.id
+}
+</file>
+
+<file path="opentofu/environments/lab/providers.tf">
+provider "oci" {
+  tenancy_ocid     = var.tenancy_ocid
+  user_ocid        = var.user_ocid
+  fingerprint      = var.fingerprint
+  private_key_path = var.private_key_path
+  region           = var.region
+}
+</file>
+
+<file path="opentofu/environments/lab/variables.tf">
+variable "tenancy_ocid" {
+  type        = string
+  description = "The tenancy OCID"
+}
+
+variable "user_ocid" {
+  type        = string
+  description = "The user OCID"
+}
+
+variable "fingerprint" {
+  type        = string
+  description = "The key fingerprint"
+}
+
+variable "private_key_path" {
+  type        = string
+  description = "Path to the private key"
+}
+
+variable "region" {
+  type        = string
+  description = "The OCI region"
+}
+
+variable "compartment_ocid" {
+  type        = string
+  description = "The compartment OCID where resources will be created"
+}
+
+variable "vcn_cidr" {
+  type        = string
+  default     = "10.0.0.0/16"
+  description = "CIDR block for the VCN"
+}
+
+variable "subnet_cidr" {
+  type        = string
+  default     = "10.0.0.0/24"
+  description = "CIDR block for the public subnet"
+}
+
+variable "ssh_public_key" {
+  type        = string
+  description = "Public SSH key for the compute instance"
+}
+</file>
+
+<file path="opentofu/environments/lab/versions.tf">
 terraform {
   required_version = ">= 1.6.0"
 
@@ -70,38 +469,55 @@ terraform {
 }
 </file>
 
-<file path="repo_structure.txt">
-Folder PATH listing for volume Data
-Volume serial number is 0000008A C87A:83A4
-D:.
-|   .gitignore
-|   repomix-output.xml
-|   repo_structure.txt
-|   versions.tf
-|   
-+---.github
-|   \---workflows
-+---bootstrap
-+---environments
-|   +---dev
-|   \---lab
-|           main.tf
-|           outputs.tf
-|           providers.tf
-|           terraform.tfvars
-|           variables.tf
-|           
-+---global
-+---modules
-+---policies
-\---scripts
-        apply.sh
-        destroy.sh
-        init.sh
-        plan.sh
+<file path="opentofu/scripts/apply.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu apply "${ENVIRONMENT}.tfplan"
 </file>
 
-<file path="scripts/retry-apply.sh">
+<file path="opentofu/scripts/destroy.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu destroy
+</file>
+
+<file path="opentofu/scripts/init.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu init
+</file>
+
+<file path="opentofu/scripts/plan.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu plan -out="${ENVIRONMENT}.tfplan"
+</file>
+
+<file path="opentofu/scripts/retry-apply.sh">
 #!/usr/bin/env bash
 
 set -euo pipefail
@@ -113,7 +529,7 @@ while true; do
   echo "Running tofu apply at $(date)"
   echo "======================================"
 
-  cd "environments/${ENVIRONMENT}"
+  cd "opentofu/environments/${ENVIRONMENT}"
 
   tofu apply -auto-approve "${ENVIRONMENT}.tfplan" && break
 
@@ -121,7 +537,7 @@ while true; do
   echo "Apply failed. Retrying in 5 minutes..."
   echo ""
 
-  cd ../..
+  cd ../../..
 
   sleep 300
 done
@@ -146,6 +562,9 @@ terraform.tfstate
 terraform.tfstate.backup
 
 *.tfplan
+
+**/.terraform/
+*.tfstate.backup
 
 ########################################
 # OpenTofu specific
@@ -213,312 +632,96 @@ Thumbs.db
 *.tmp
 </file>
 
-<file path="environments/lab/main.tf">
-############################################
-# AVAILABILITY DOMAINS
-############################################
-data "oci_identity_availability_domains" "ads" {
-  compartment_id = var.tenancy_ocid
-}
-
-############################################
-# UBUNTU IMAGE (ARM)
-############################################
-data "oci_core_images" "ubuntu" {
-  compartment_id           = var.compartment_ocid
-  operating_system         = "Canonical Ubuntu"
-  operating_system_version = "22.04"
-  shape                    = "VM.Standard.A1.Flex"
-
-  sort_by    = "TIMECREATED"
-  sort_order = "DESC"
-
-  filter {
-    name   = "display_name"
-    values = [".*aarch64.*"]
-    regex  = true
-  }
-}
-
-############################################
-# VCN
-############################################
-resource "oci_core_vcn" "lab_vcn" {
-  compartment_id = var.compartment_ocid
-  cidr_block     = var.vcn_cidr
-  display_name   = "adityac1305-vcn"
-  dns_label      = "labvcn"
-}
-
-############################################
-# INTERNET GATEWAY
-############################################
-resource "oci_core_internet_gateway" "igw" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.lab_vcn.id
-  display_name   = "adityac1305-igw"
-  enabled        = true
-}
-
-############################################
-# ROUTE TABLE
-############################################
-resource "oci_core_route_table" "rt" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.lab_vcn.id
-
-  route_rules {
-    destination       = "0.0.0.0/0"
-    destination_type  = "CIDR_BLOCK"
-    network_entity_id = oci_core_internet_gateway.igw.id
-  }
-}
-
-############################################
-# SECURITY LIST
-############################################
-resource "oci_core_security_list" "sl" {
-  compartment_id = var.compartment_ocid
-  vcn_id         = oci_core_vcn.lab_vcn.id
-
-  # SSH
-  ingress_security_rules {
-    protocol = "6" # TCP
-    source   = "0.0.0.0/0"
-    tcp_options {
-      min = 22
-      max = 22
-    }
-  }
-
-  # HTTP
-  ingress_security_rules {
-    protocol = "6" # TCP
-    source   = "0.0.0.0/0"
-    tcp_options {
-      min = 80
-      max = 80
-    }
-  }
-
-  # Essential ICMP for Path MTU Discovery
-  ingress_security_rules {
-    protocol = "1" # ICMP
-    source   = "0.0.0.0/0"
-    icmp_options {
-      type = 3
-      code = 4
-    }
-  }
-
-  # ICMP for Ping
-  ingress_security_rules {
-    protocol = "1" # ICMP
-    source   = "0.0.0.0/0"
-    icmp_options {
-      type = 8
-    }
-  }
-
-  egress_security_rules {
-    protocol    = "all"
-    destination = "0.0.0.0/0"
-  }
-}
-
-############################################
-# SUBNET
-############################################
-resource "oci_core_subnet" "public_subnet" {
-  compartment_id    = var.compartment_ocid
-  vcn_id            = oci_core_vcn.lab_vcn.id
-  cidr_block        = var.subnet_cidr
-  display_name      = "adityac1305-public-subnet"
-
-  route_table_id    = oci_core_route_table.rt.id
-  security_list_ids = [oci_core_security_list.sl.id]
-
-  prohibit_public_ip_on_vnic = false
-}
-
-############################################
-# COMPUTE INSTANCE
-############################################
-resource "oci_core_instance" "vm" {
-  compartment_id      = var.compartment_ocid
-  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[1].name
-
-  display_name = "adityac1305-lab"
-  shape        = "VM.Standard.A1.Flex"
-
-  shape_config {
-    ocpus         = 4
-    memory_in_gbs = 24
-  }
-
-  create_vnic_details {
-    subnet_id        = oci_core_subnet.public_subnet.id
-    assign_public_ip = false
-  }
-
-  source_details {
-    source_type = "image"
-    source_id   = data.oci_core_images.ubuntu.images[0].id
-  }
-
-  metadata = {
-    ssh_authorized_keys = var.ssh_public_key
-  }
-}
-
-############################################
-# VNIC & PRIVATE IP LOOKUP
-############################################
-data "oci_core_vnic_attachments" "vm_vnic_attach" {
-  compartment_id = var.compartment_ocid
-  instance_id    = oci_core_instance.vm.id
-  depends_on     = [oci_core_instance.vm]
-}
-
-data "oci_core_private_ips" "vm_private_ips" {
-  vnic_id    = data.oci_core_vnic_attachments.vm_vnic_attach.vnic_attachments[0].vnic_id
-  depends_on = [data.oci_core_vnic_attachments.vm_vnic_attach]
-}
-
-############################################
-# RESERVED PUBLIC IP & ASSOCIATION
-############################################
-resource "oci_core_public_ip" "reserved_ip" {
-  compartment_id = var.compartment_ocid
-  lifetime       = "RESERVED"
-  display_name   = "ace1305-lab-reserved-ip"
-  private_ip_id  = data.oci_core_private_ips.vm_private_ips.private_ips[0].id
-}
-</file>
-
-<file path="environments/lab/outputs.tf">
-output "instance_id" {
-  value = oci_core_instance.vm.id
-}
-
-output "private_ip" {
-  value = oci_core_instance.vm.private_ip
-}
-
-output "public_ip" {
-  value = oci_core_public_ip.reserved_ip.ip_address
-}
-
-output "vcn_id" {
-  value = oci_core_vcn.lab_vcn.id
-}
-</file>
-
-<file path="environments/lab/providers.tf">
-provider "oci" {
-  tenancy_ocid     = var.tenancy_ocid
-  user_ocid        = var.user_ocid
-  fingerprint      = var.fingerprint
-  private_key_path = var.private_key_path
-  region           = var.region
-}
-</file>
-
-<file path="environments/lab/variables.tf">
-variable "tenancy_ocid" {
-  type        = string
-  description = "The tenancy OCID"
-}
-
-variable "user_ocid" {
-  type        = string
-  description = "The user OCID"
-}
-
-variable "fingerprint" {
-  type        = string
-  description = "The key fingerprint"
-}
-
-variable "private_key_path" {
-  type        = string
-  description = "Path to the private key"
-}
-
-variable "region" {
-  type        = string
-  description = "The OCI region"
-}
-
-variable "compartment_ocid" {
-  type        = string
-  description = "The compartment OCID where resources will be created"
-}
-
-variable "vcn_cidr" {
-  type        = string
-  default     = "10.0.0.0/16"
-  description = "CIDR block for the VCN"
-}
-
-variable "subnet_cidr" {
-  type        = string
-  default     = "10.0.0.0/24"
-  description = "CIDR block for the public subnet"
-}
-
-variable "ssh_public_key" {
-  type        = string
-  description = "Public SSH key for the compute instance"
-}
-</file>
-
-<file path="scripts/apply.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "environments/${ENVIRONMENT}"
-
-tofu apply "${ENVIRONMENT}.tfplan"
-</file>
-
-<file path="scripts/destroy.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "environments/${ENVIRONMENT}"
-
-tofu destroy
-</file>
-
-<file path="scripts/init.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "environments/${ENVIRONMENT}"
-
-tofu init
-</file>
-
-<file path="scripts/plan.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "environments/${ENVIRONMENT}"
-
-tofu plan -out="${ENVIRONMENT}.tfplan"
+<file path="repo_structure.txt">
+Folder PATH listing for volume Data
+Volume serial number is 000000F5 C87A:83A4
+D:.
+|   .gitignore
+|   repomix-output.xml
+|   repo_structure.txt
+|   
++---.github
+|   \---workflows
++---ansible
+|   |   ansible.cfg
+|   |   requirements.yml
+|   |   
+|   +---inventories
+|   |   +---dev
+|   |   |   |   hosts.ini
+|   |   |   |   
+|   |   |   \---group_vars
+|   |   |           all.yml
+|   |   |           
+|   |   \---lab
+|   |       |   hosts.ini
+|   |       |   
+|   |       \---group_vars
+|   |               all.yml
+|   |               
+|   +---playbooks
+|   |       bootstrap.yml
+|   |       cert-manager.yml
+|   |       common.yml
+|   |       ingress-nginx.yml
+|   |       k3s-bootstrap.yml
+|   |       k3s-install.yml
+|   |       keycloak.yml
+|   |       monitoring.yml
+|   |       oauth2-proxy.yml
+|   |       vault.yml
+|   |       
+|   +---roles
+|   |   +---cert-manager
+|   |   +---common
+|   |   +---docker
+|   |   +---ingress-nginx
+|   |   +---k3s
+|   |   +---keycloak
+|   |   +---monitoring
+|   |   +---oauth2-proxy
+|   |   \---vault
+|   +---scripts
+|   |       bootstrap-kubeconfig.sh
+|   |       generate-inventory.sh
+|   |       wait-for-ssh.sh
+|   |       
+|   +---templates
+|   \---vars
++---helm
+\---opentofu
+    +---environments
+    |   +---dev
+    |   \---lab
+    |       |   .terraform.lock.hcl
+    |       |   lab.tfplan
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   providers.tf
+    |       |   terraform.tfstate
+    |       |   terraform.tfstate.backup
+    |       |   terraform.tfvars
+    |       |   variables.tf
+    |       |   versions.tf
+    |       |   
+    |       \---.terraform
+    |           \---providers
+    |               \---registry.opentofu.org
+    |                   \---oracle
+    |                       \---oci
+    |                           \---8.15.0
+    |                               |   windows_amd64.lock
+    |                               |   
+    |                               \---windows_amd64
+    |                                       terraform-provider-oci_v8.15.0
+    |                                       
+    +---modules
+    \---scripts
+            apply.sh
+            destroy.sh
+            init.sh
+            plan.sh
+            retry-apply.sh
 </file>
 
 </files>
