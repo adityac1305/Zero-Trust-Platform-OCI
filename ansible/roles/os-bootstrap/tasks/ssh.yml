@@ -1,0 +1,51 @@
+---
+
+- name: Create backup directory
+  file:
+    path: /root/backup
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+
+- name: Backup sshd config
+  copy:
+    src: /etc/ssh/sshd_config
+    dest: /root/backup/sshd_config
+    remote_src: true
+    force: false
+
+- name: Disable password authentication
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+
+- name: Disable root login
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin no'
+
+- name: Disable X11 forwarding
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?X11Forwarding'
+    line: 'X11Forwarding no'
+
+- name: Reduce brute force attempts
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?MaxAuthTries'
+    line: 'MaxAuthTries 3'
+
+- name: Validate ssh config before apply
+  command: sshd -t
+  changed_when: false
+
+
+- name: Reload SSH safely
+  service:
+    name: ssh
+    state: reloaded

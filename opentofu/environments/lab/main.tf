@@ -181,11 +181,31 @@ resource "oci_core_instance" "vm" {
   source_details {
     source_type = "image"
     source_id   = data.oci_core_images.ubuntu.images[0].id
+    #boot_volume_size_in_gbs = 50   # Clean 50 GB partition allocation for OS root
   }
 
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
   }
+}
+
+############################################
+# ADDITIONAL 140 GB DATA BLOCK VOLUME
+############################################
+resource "oci_core_volume" "lab_data_volume" {
+  compartment_id      = var.compartment_ocid
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
+  display_name        = "adityac1305-lab-data"
+  size_in_gbs         = 140
+}
+
+############################################
+# ATTACH DATA VOLUME TO COMPUTE VM
+############################################
+resource "oci_core_volume_attachment" "lab_volume_attach" {
+  attachment_type = "paravirtualized"
+  instance_id     = oci_core_instance.vm.id
+  volume_id       = oci_core_volume.lab_data_volume.id
 }
 
 ############################################

@@ -1,0 +1,16 @@
+---
+
+- name: Install utility packages
+  apt:
+    name:
+      - curl
+      - jq
+      - vim
+      - git
+      - unzip
+      - htop
+      - fail2ban
+      - socat
+      - conntrack
+    state: present
+    update_cache: true
