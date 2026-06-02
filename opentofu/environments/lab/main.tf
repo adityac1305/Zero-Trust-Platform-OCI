@@ -142,7 +142,7 @@ resource "oci_core_subnet" "public_subnet" {
   compartment_id = var.compartment_ocid
   vcn_id         = oci_core_vcn.lab_vcn.id
 
-  cidr_block  = var.subnet_cidr
+  cidr_block   = var.subnet_cidr
   display_name = "adityac1305-public-subnet"
 
   route_table_id = oci_core_route_table.rt.id
