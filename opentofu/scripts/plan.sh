@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+# test workflows
 set -euo pipefail
 
 ENVIRONMENT=${1:-lab}
