@@ -1,0 +1,9 @@
+---
+- name: K3s Bootstrap Placeholder
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Placeholder task
+      debug:
+        msg: "K3s bootstrap not implemented yet"
