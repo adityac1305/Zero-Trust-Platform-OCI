@@ -1,43 +1,46 @@
 ########################################
-# Terraform / OpenTofu
+# Terraform / OpenTofu State
 ########################################
 
 *.tfstate
 *.tfstate.*
-crash.log
-crash.*.log
-
-.terraform/
-.terraform.lock.hcl
 terraform.tfstate
 terraform.tfstate.backup
 
 *.tfplan
-
-**/.terraform/
-*.tfstate.backup
-
-########################################
-# OpenTofu specific
-########################################
+*.tfplan.*
 
 .tofu/
-tofu.tfstate*
-tofu.plan
+.terraform/
+**/.terraform/
+**/.tofu/
+
+# Terraform override files (from gitignore 1)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
 ########################################
-# Variable files (IMPORTANT - secrets risk)
+# Terraform / OpenTofu Variables
 ########################################
 
 *.tfvars
 *.tfvars.json
 
-# allow example files
 !example.tfvars
 !*.example.tfvars
 
 ########################################
-# CLI config / credentials
+# OCI Credentials
+########################################
+
+*.oci
+oci_api_key*
+.oci/
+
+########################################
+# SSH Keys (NEVER COMMIT)
 ########################################
 
 *.pem
@@ -46,12 +49,13 @@ tofu.plan
 *.p12
 *.pfx
 
-*.oci
-oci_api_key*
-~/.oci/
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
 
 ########################################
-# Environment files
+# Environment Files
 ########################################
 
 .env
@@ -59,25 +63,115 @@ oci_api_key*
 !.env.example
 
 ########################################
+# Kubernetes / Kubeconfig
+########################################
+
+.kube/
+*.kubeconfig
+
+# Kubernetes secret patterns (from gitignore 1)
+secret.yaml
+secrets.yaml
+*-secret.yaml
+
+########################################
+# Ansible
+########################################
+
+*.retry
+vault_password*
+*.vault
+
+########################################
 # Logs
 ########################################
 
 *.log
+logs/
+
+crash.log
+crash.*.log
 
 ########################################
-# OS / Editor noise
+# Python / Ansible runtime
 ########################################
 
-.DS_Store
-Thumbs.db
+__pycache__/
+*.pyc
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+########################################
+# Virtual environments (from gitignore 1)
+########################################
+
+venv/
+.venv/
+env/
+ENV/
+
+########################################
+# Build artifacts (from gitignore 1)
+########################################
+
+build/
+dist/
+*.egg-info/
+
+########################################
+# Node (future-proof from gitignore 1)
+########################################
+
+node_modules/
+
+########################################
+# VS Code / IDE
+########################################
 
 .vscode/
 .idea/
 
 ########################################
-# Script temp files
+# OS Files
+########################################
+
+.DS_Store
+Thumbs.db
+
+########################################
+# Temporary / Backup Files
 ########################################
 
 *.bak
 *.swp
 *.tmp
+*.temp
+*~
+
+########################################
+# Draw.io backups (from gitignore 1)
+########################################
+
+*.drawio.bak
+*.drawio.backup
+*.backup
+
+########################################
+# Vault / Secrets (from gitignore 1)
+########################################
+
+.vault-token
+vault-init.txt
+unseal-keys.txt
+vault-keys.json
+vault-root-token.txt
+
+########################################
+# Docker / Containers (from gitignore 1)
+########################################
+
+docker-data/
+*.pid
+*.sock
