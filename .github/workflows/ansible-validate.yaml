@@ -1,0 +1,29 @@
+---
+
+name: Ansible Validate
+
+on:
+  pull_request:
+    paths:
+      - "ansible/**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Syntax check OS bootstrap
+        run: |
+          ansible-playbook ansible/playbooks/os-bootstrap.yml --syntax-check
+
+      - name: Syntax check K3s
+        run: |
+          ansible-playbook ansible/playbooks/k3s-bootstrap.yml --syntax-check
