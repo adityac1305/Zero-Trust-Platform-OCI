@@ -1,20 +1,16 @@
 ---
 
 - name: Create backup directory
-  file:
+  ansible.builtin.file:
     path: /root/backup
     state: directory
-    owner: root
-    group: root
     mode: '0755'
 
-
 - name: Backup sshd config
-  copy:
+  ansible.builtin.copy:
     src: /etc/ssh/sshd_config
     dest: /root/backup/sshd_config
     remote_src: true
-    force: false
 
 - name: Disable password authentication
   lineinfile:

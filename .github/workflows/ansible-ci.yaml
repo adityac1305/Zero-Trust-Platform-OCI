@@ -1,5 +1,3 @@
----
-
 name: Ansible CI
 
 on:
@@ -17,10 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Ansible
+      - name: Install Ansible + dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ansible
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
 
       - name: Set Ansible config
         run: echo "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" >> $GITHUB_ENV
@@ -46,7 +50,12 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible python3-pip
-          pip3 install ansible-lint
+          pip3 install --upgrade pip ansible-lint
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
 
       - name: Set Ansible config
         run: echo "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" >> $GITHUB_ENV
