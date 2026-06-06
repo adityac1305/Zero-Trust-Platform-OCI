@@ -16,7 +16,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: opentofu/environments/lab
+        working-directory: opentofu
 
     steps:
       - uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: opentofu/environments/lab
+        working-directory: opentofu
 
     steps:
       - uses: actions/checkout@v4
