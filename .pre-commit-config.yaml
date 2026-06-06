@@ -3,4 +3,3 @@ repos:
     rev: v8.18.0
     hooks:
       - id: gitleaks
-
