@@ -5,5 +5,5 @@
 
   tasks:
     - name: Placeholder task
-      debug:
+      ansible.builtin.debug:
         msg: "K3s bootstrap not implemented yet"

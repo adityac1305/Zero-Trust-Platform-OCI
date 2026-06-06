@@ -1,1 +1,5 @@
 ---
+- name: Site Playbook
+  hosts: all
+  gather_facts: false
+  tasks: []

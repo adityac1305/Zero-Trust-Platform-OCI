@@ -1,8 +1,7 @@
 ---
 
-
 - name: Enable fail2ban
-  service:
+  ansible.builtin.service:
     name: fail2ban
     enabled: true
     state: started

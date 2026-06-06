@@ -1,47 +1,46 @@
 ---
-
 - name: Create backup directory
   ansible.builtin.file:
     path: /root/backup
     state: directory
-    mode: '0755'
+    mode: "0755"
 
 - name: Backup sshd config
   ansible.builtin.copy:
     src: /etc/ssh/sshd_config
     dest: /root/backup/sshd_config
     remote_src: true
+    mode: "0644"
 
 - name: Disable password authentication
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: '^#?PasswordAuthentication'
     line: 'PasswordAuthentication no'
 
 - name: Disable root login
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: '^#?PermitRootLogin'
     line: 'PermitRootLogin no'
 
 - name: Disable X11 forwarding
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: '^#?X11Forwarding'
     line: 'X11Forwarding no'
 
 - name: Reduce brute force attempts
-  lineinfile:
+  ansible.builtin.lineinfile:
     path: /etc/ssh/sshd_config
     regexp: '^#?MaxAuthTries'
     line: 'MaxAuthTries 3'
 
 - name: Validate ssh config before apply
-  command: sshd -t
+  ansible.builtin.command: sshd -t
   changed_when: false
 
-
 - name: Reload SSH safely
-  service:
+  ansible.builtin.service:
     name: ssh
     state: reloaded

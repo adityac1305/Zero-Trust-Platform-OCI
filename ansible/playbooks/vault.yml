@@ -1,1 +1,5 @@
 ---
+- name: Vault Playbook
+  hosts: all
+  gather_facts: false
+  tasks: []

@@ -1,10 +1,20 @@
 ---
-
 # Main Task Loader
 
-- import_tasks: users.yml
-- import_tasks: packages.yml
-- import_tasks: ssh.yml
-- import_tasks: firewall.yml
-- import_tasks: fail2ban.yml
-- import_tasks: sysctl.yml
+- name: Users setup
+  ansible.builtin.import_tasks: users.yml
+
+- name: Package installation
+  ansible.builtin.import_tasks: packages.yml
+
+- name: SSH configuration
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Firewall setup
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: Fail2ban setup
+  ansible.builtin.import_tasks: fail2ban.yml
+
+- name: Sysctl configuration
+  ansible.builtin.import_tasks: sysctl.yml

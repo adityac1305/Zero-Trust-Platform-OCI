@@ -1,17 +1,17 @@
 ---
-
 - name: OS Rollback
   hosts: all
   become: true
 
   tasks:
     - name: Restore sshd config
-      copy:
+      ansible.builtin.copy:
         src: /root/backup/sshd_config
         dest: /etc/ssh/sshd_config
         remote_src: true
+        mode: "0644"
 
     - name: Restart ssh
-      service:
+      ansible.builtin.service:
         name: ssh
         state: restarted
