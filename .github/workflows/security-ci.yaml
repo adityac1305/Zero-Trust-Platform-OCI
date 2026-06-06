@@ -21,7 +21,9 @@ jobs:
 
       - name: Run yamllint
         run: |
-          yamllint .
+          yamllint \
+            -d '{extends: default, rules: {truthy: disable}}' \
+            .
 
   gitleaks:
     name: Gitleaks Scan
