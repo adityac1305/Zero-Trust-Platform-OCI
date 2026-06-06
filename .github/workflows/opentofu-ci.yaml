@@ -1,0 +1,65 @@
+---
+name: OpenTofu CI
+
+on:
+  pull_request:
+    paths:
+      - "opentofu/**"
+
+  workflow_dispatch:
+
+jobs:
+
+  fmt:
+    name: OpenTofu Format
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+
+      - name: Format Check
+        run: tofu fmt -check -recursive
+
+  validate:
+    name: OpenTofu Validate
+    runs-on: ubuntu-latest
+    needs: fmt
+
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: opentofu/setup-opentofu@v1
+
+      - name: Init
+        run: tofu init -backend=false
+
+      - name: Validate
+        run: tofu validate
+
+  security:
+    name: OpenTofu Security Scan
+    runs-on: ubuntu-latest
+    needs: validate
+
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy IaC Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: .
