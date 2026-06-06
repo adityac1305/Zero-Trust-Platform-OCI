@@ -1,11 +1,11 @@
 ---
+
 name: Ansible CI
 
 on:
   pull_request:
     paths:
       - "ansible/**"
-
   workflow_dispatch:
 
 jobs:
@@ -22,16 +22,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ansible
 
-      - name: Configure Ansible
-        run: |
-          echo "ANSIBLE_CONFIG=ansible/ansible.cfg" >> $GITHUB_ENV
+      - name: Set Ansible config
+        run: echo "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" >> $GITHUB_ENV
 
       - name: Syntax Check OS Bootstrap
+        working-directory: ansible
         run: |
           ansible-playbook \
-            -i ansible/inventories/lab/hosts.ini \
-            ansible/playbooks/os-bootstrap.yml \
+            -i inventories/lab/hosts.ini \
+            playbooks/os-bootstrap.yml \
             --syntax-check
+
 
   lint:
     name: Ansible Lint
@@ -41,15 +42,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Ansible
+      - name: Install Ansible + lint
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible python3-pip
-
-      - name: Install ansible-lint
-        run: |
           pip3 install ansible-lint
 
-      - name: Run ansible-lint
+      - name: Set Ansible config
+        run: echo "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" >> $GITHUB_ENV
+
+      - name: Run ansible-lint (entire repo)
         run: |
-          ansible-lint ansible/playbooks/os-bootstrap.yml
+          ansible-lint ansible/
