@@ -138,7 +138,6 @@ resource "oci_core_default_security_list" "default_sl" {
 ############################################
 # PUBLIC SUBNET
 ############################################
-
 resource "oci_core_subnet" "public_subnet" {
   compartment_id = var.compartment_ocid
   vcn_id         = oci_core_vcn.lab_vcn.id
