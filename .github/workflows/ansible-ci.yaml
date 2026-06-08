@@ -1,3 +1,5 @@
+---
+
 name: Ansible CI
 
 on:
@@ -27,7 +29,10 @@ jobs:
           ansible-galaxy collection install ansible.posix
 
       - name: Set Ansible config
-        run: echo "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" >> $GITHUB_ENV
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
 
       - name: Syntax Check OS Bootstrap
         working-directory: ansible
@@ -58,7 +63,10 @@ jobs:
           ansible-galaxy collection install ansible.posix
 
       - name: Set Ansible config
-        run: echo "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" >> $GITHUB_ENV
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
 
       - name: Run ansible-lint (entire repo)
         run: |

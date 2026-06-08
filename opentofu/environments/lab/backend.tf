@@ -1,8 +1,8 @@
 terraform {
   backend "s3" {
-    bucket   = "tofu-state"
-    key      = "lab/terraform.tfstate"
-    region   = "us-ashburn-1"
+    bucket = "tofu-state"
+    key    = "lab/terraform.tfstate"
+    region = "us-ashburn-1"
 
     endpoint = "https://id0furdqqyma.compat.objectstorage.us-ashburn-1.oraclecloud.com"
 

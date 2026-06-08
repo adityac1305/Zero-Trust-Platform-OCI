@@ -1,3 +1,5 @@
+---
+
 name: Infrastructure Deploy (CD)
 
 on:
@@ -146,7 +148,9 @@ jobs:
         run: |
           mkdir -p inventory
           echo "[k3s]" > inventory/hosts.ini
-          echo "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" >> inventory/hosts.ini
+          echo \
+          "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
+          >> inventory/hosts.ini
 
       - name: Upload Inventory
         uses: actions/upload-artifact@v4

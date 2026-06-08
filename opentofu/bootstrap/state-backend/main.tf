@@ -38,6 +38,6 @@ resource "oci_objectstorage_bucket" "tofu_state" {
   access_type = "NoPublicAccess"
 
   storage_tier = "Standard"
-  
+
   versioning = "Enabled"
 }
