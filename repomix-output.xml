@@ -41,14 +41,9 @@ The content is organized as follows:
 
 <directory_structure>
 .github/workflows/ansible-ci.yaml
-.github/workflows/ansible-lint.yaml
-.github/workflows/ansible-validate.yaml
-.github/workflows/gitleaks.yaml
+.github/workflows/infrastructure-deploy.yaml
 .github/workflows/opentofu-ci.yaml
-.github/workflows/opentofu-security.yaml
-.github/workflows/opentofu-validate.yaml
 .github/workflows/security-ci.yaml
-.github/workflows/yaml-lint.yaml
 .gitignore
 .pre-commit-config.yaml
 ansible/ansible.cfg
@@ -78,7 +73,16 @@ ansible/scripts/bootstrap-kubeconfig.sh
 ansible/scripts/generate-inventory.sh
 ansible/scripts/restore-configs.sh
 ansible/scripts/wait-for-ssh.sh
+opentofu/bootstrap/state-backend/.terraform.lock.hcl
+opentofu/bootstrap/state-backend/main.tf
+opentofu/bootstrap/state-backend/outputs.tf
+opentofu/bootstrap/state-backend/scripts/apply.sh
+opentofu/bootstrap/state-backend/scripts/destroy.sh
+opentofu/bootstrap/state-backend/scripts/init.sh
+opentofu/bootstrap/state-backend/scripts/plan.sh
+opentofu/bootstrap/state-backend/variables.tf
 opentofu/environments/lab/.terraform.lock.hcl
+opentofu/environments/lab/backend.tf
 opentofu/environments/lab/main.tf
 opentofu/environments/lab/outputs.tf
 opentofu/environments/lab/providers.tf
@@ -95,15 +99,361 @@ repo_structure.txt
 <files>
 This section contains the contents of the repository's files.
 
+<file path=".github/workflows/infrastructure-deploy.yaml">
+name: Infrastructure Deploy (CD)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "opentofu/**"
+      - "ansible/**"
+
+  workflow_dispatch:
+
+jobs:
+
+  ############################################################
+  # 1. OPEN TOFU PLAN
+  ############################################################
+  plan:
+    if: github.event_name == 'push'
+    name: OpenTofu Plan
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Initialize OpenTofu
+        run: tofu init -backend=false
+
+      - name: Generate Plan
+        run: tofu plan -out=tfplan
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab/tfplan
+
+
+  ############################################################
+  # 2. APPLY (PROTECTED STEP)
+  ############################################################
+  apply:
+    if: github.event_name == 'push'
+    name: OpenTofu Apply
+    runs-on: ubuntu-latest
+    needs: plan
+
+    environment:
+      name: production
+
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Initialize OpenTofu
+        run: tofu init -backend=false
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab
+
+      - name: Apply Infrastructure
+        run: tofu apply -auto-approve tfplan
+
+
+  ############################################################
+  # 3. GENERATE ANSIBLE INVENTORY
+  ############################################################
+  inventory:
+    if: github.event_name == 'push'
+    name: Generate Inventory
+    runs-on: ubuntu-latest
+    needs: apply
+
+    outputs:
+      vm_ip: ${{ steps.extract.outputs.vm_ip }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Extract VM IP from OpenTofu
+        id: extract
+        working-directory: opentofu/environments/lab
+        run: |
+          PUBLIC_IP=$(tofu output -raw public_ip)
+          echo "vm_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+      - name: Create Ansible Inventory
+        run: |
+          mkdir -p inventory
+          echo "[k3s]" > inventory/hosts.ini
+          echo "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" >> inventory/hosts.ini
+
+      - name: Upload Inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory/hosts.ini
+
+
+  ############################################################
+  # 4. ANSIBLE PROVISIONING
+  ############################################################
+  ansible:
+    if: github.event_name == 'push'
+    name: Run Ansible Bootstrap
+    runs-on: ubuntu-latest
+    needs: inventory
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
+
+      - name: Install required collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Start SSH agent and load key
+        run: |
+          eval $(ssh-agent -s)
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+          ssh-add key.pem
+
+      - name: Run Ansible Playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+        run: |
+          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg ansible-playbook \
+            -i inventory/hosts.ini \
+            ansible/playbooks/os-bootstrap.yml \
+            --private-key key.pem
+</file>
+
+<file path="opentofu/bootstrap/state-backend/.terraform.lock.hcl">
+# This file is maintained automatically by "tofu init".
+# Manual edits may be lost in future updates.
+
+provider "registry.opentofu.org/oracle/oci" {
+  version     = "8.17.0"
+  constraints = ">= 5.0.0"
+  hashes = [
+    "h1:HwvPOSg//BPeDqsTe+cZ1yMQTz4DGP/23f87S+0AVBc=",
+    "zh:0d4fb4119f645f6facd09b201ca0463a50c88593bff91984e57f17e8f13090d0",
+    "zh:24c09162ae35c6f7ee28cc3907d39143968376ef050560e0452e6ecc06514630",
+    "zh:3975b2c8a36add4a961bbb0fffec6e74cf0c4051f8cd02a0de82f03920dd6e21",
+    "zh:39c6b6be9c8956bac5e6cdaa9b82519760dd68d5e0e222de91b916ff2bcb7995",
+    "zh:62d7d6f60b254a07f96766e27e39e29bea53b346e7e61f517f0cf8ede2d43dac",
+    "zh:6e4f9dbd333531a8487d49ef8747e79fd49920e13b6b8993831e6da46ff580d9",
+    "zh:6e7d4d9c12803df4d4b8484665da280baca694a9ea1ff9ccee0623a02281103f",
+    "zh:7794ed82797cc64732b84c834bc9f8dfe57fd715ab6eb7ec88d500fe2a05a6c6",
+    "zh:85f7044b30a8dad5929eee2d4c8f9131ff718cf913304aba23d21f289c9873fd",
+    "zh:9b12af85486a96aedd8d7984b0ff811a4b42e3d88dad1a3fb4c0b580d04fa425",
+    "zh:c76b0375543212996cb918bbc451c48321b65ce01853254938440db0d74236ba",
+    "zh:ca7c091e9171eafafdf52d161da0786162dccd0a2b01a42e6e81ce6c59ca3333",
+    "zh:cd160ee6c9f151c6dffa151abd5a7d25f101c7d62de91a623b253972fc6997c3",
+    "zh:d4859e318f2ad0e86e7bb192183edc55bbf053939dad1540900963a325ac4818",
+    "zh:e7309aa5889362abc0617d340d019bfde9b985b5bd07d746505a9a2561ea712e",
+  ]
+}
+</file>
+
+<file path="opentofu/bootstrap/state-backend/main.tf">
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    oci = {
+      source  = "oracle/oci"
+      version = ">= 5.0.0"
+    }
+  }
+}
+
+provider "oci" {
+  tenancy_ocid     = var.tenancy_ocid
+  user_ocid        = var.user_ocid
+  fingerprint      = var.fingerprint
+  private_key_path = var.private_key_path
+  region           = var.region
+}
+
+#################################################
+# OBJECT STORAGE NAMESPACE
+#################################################
+
+data "oci_objectstorage_namespace" "ns" {
+  compartment_id = var.tenancy_ocid
+}
+
+#################################################
+# STATE BUCKET
+#################################################
+
+resource "oci_objectstorage_bucket" "tofu_state" {
+  compartment_id = var.compartment_ocid
+  namespace      = data.oci_objectstorage_namespace.ns.namespace
+
+  name = var.bucket_name
+
+  access_type = "NoPublicAccess"
+
+  storage_tier = "Standard"
+  
+  versioning = "Enabled"
+}
+</file>
+
+<file path="opentofu/bootstrap/state-backend/outputs.tf">
+output "bucket_name" {
+  value = oci_objectstorage_bucket.tofu_state.name
+}
+
+output "namespace" {
+  value = data.oci_objectstorage_namespace.ns.namespace
+}
+</file>
+
+<file path="opentofu/bootstrap/state-backend/scripts/apply.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cd opentofu/bootstrap/state-backend
+
+tofu apply bootstrap.tfplan
+</file>
+
+<file path="opentofu/bootstrap/state-backend/scripts/destroy.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+echo "WARNING: This will destroy the OpenTofu state bucket."
+
+read -r -p "Type YES to continue: " CONFIRM
+
+if [ "$CONFIRM" != "YES" ]; then
+  echo "Aborted."
+  exit 1
+fi
+
+cd opentofu/bootstrap/state-backend
+
+tofu destroy -var-file=bootstrap.tfvars
+</file>
+
+<file path="opentofu/bootstrap/state-backend/scripts/init.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cd opentofu/bootstrap/state-backend
+
+tofu init -input=false -reconfigure
+</file>
+
+<file path="opentofu/bootstrap/state-backend/scripts/plan.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+cd opentofu/bootstrap/state-backend
+
+tofu plan -var-file=bootstrap.tfvars -out=bootstrap.tfplan
+</file>
+
+<file path="opentofu/bootstrap/state-backend/variables.tf">
+variable "tenancy_ocid" {
+  type = string
+}
+
+variable "user_ocid" {
+  type = string
+}
+
+variable "fingerprint" {
+  type = string
+}
+
+variable "private_key_path" {
+  type = string
+}
+
+variable "region" {
+  type = string
+}
+
+variable "compartment_ocid" {
+  type = string
+}
+
+variable "bucket_name" {
+  type    = string
+  default = "tofu-state"
+}
+</file>
+
+<file path="opentofu/environments/lab/backend.tf">
+terraform {
+  backend "s3" {
+    bucket   = "tofu-state"
+    key      = "lab/terraform.tfstate"
+    region   = "us-ashburn-1"
+
+    endpoint = "https://id0furdqqyma.compat.objectstorage.us-ashburn-1.oraclecloud.com"
+
+    skip_region_validation      = true
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
+  }
+}
+</file>
+
 <file path="ansible/inventories/dev/group_vars/all.yml">
 
 </file>
 
 <file path="ansible/inventories/dev/hosts.ini">
-
-</file>
-
-<file path="ansible/requirements.yml">
 
 </file>
 
@@ -310,129 +660,6 @@ echo ""
 echo "Infrastructure applied successfully."
 </file>
 
-<file path=".github/workflows/ansible-lint.yaml">
----
-
-name: Ansible Lint
-
-on:
-  pull_request:
-    paths:
-      - "ansible/**"
-
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Ansible
-        run: |
-          pip install ansible ansible-lint
-
-      - name: Run Ansible Lint
-        run: |
-          ansible-lint ansible/playbooks/os-bootstrap.yml
-</file>
-
-<file path=".github/workflows/gitleaks.yaml">
----
-
-
-name: Gitleaks Scan
-
-on:
-  pull_request:
-  push:
-    branches:
-      - main
-
-jobs:
-  gitleaks:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-</file>
-
-<file path=".github/workflows/opentofu-security.yaml">
----
-
-name: OpenTofu Security Scan
-
-on:
-  pull_request:
-    paths:
-      - "opentofu/**"
-
-jobs:
-  tfsec:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: aquasecurity/tfsec-action@v1.0.3
-</file>
-
-<file path=".github/workflows/opentofu-validate.yaml">
----
-
-name: OpenTofu Validate
-
-on:
-  pull_request:
-    paths:
-      - "opentofu/**"
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install OpenTofu
-        uses: opentofu/setup-opentofu@v1
-
-      - name: Init (no backend)
-        run: tofu init -backend=false
-
-      - name: Format check
-        run: tofu fmt -check -recursive
-
-      - name: Validate
-        run: tofu validate
-</file>
-
-<file path=".github/workflows/yaml-lint.yaml">
----
-
-name: YAML Lint
-
-on:
-  pull_request
-
-jobs:
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Lint YAML
-        uses: ibiqlik/action-yamllint@v3
-</file>
-
 <file path="ansible/ansible.cfg">
 [defaults]
 inventory = inventories/lab/hosts.ini
@@ -451,41 +678,11 @@ become_method = sudo
 141.148.11.46 ansible_user=ubuntu
 </file>
 
-<file path="ansible/playbooks/os-rollback.yml">
+<file path="ansible/requirements.yml">
 ---
-
-- name: OS Rollback
-  hosts: all
-  become: true
-
-  tasks:
-    - name: Restore sshd config
-      copy:
-        src: /root/backup/sshd_config
-        dest: /etc/ssh/sshd_config
-        remote_src: true
-
-    - name: Restart ssh
-      service:
-        name: ssh
-        state: restarted
-</file>
-
-<file path="ansible/playbooks/vault.yml">
----
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/main.yml">
----
-
-# Main Task Loader
-
-- import_tasks: users.yml
-- import_tasks: packages.yml
-- import_tasks: ssh.yml
-- import_tasks: firewall.yml
-- import_tasks: fail2ban.yml
-- import_tasks: sysctl.yml
+collections:
+  - name: community.general
+  - name: ansible.posix
 </file>
 
 <file path="opentofu/scripts/plan.sh">
@@ -755,18 +952,6 @@ docker-data/
 ansible_python_interpreter: /usr/bin/python3
 </file>
 
-<file path="ansible/playbooks/k3s-bootstrap.yml">
----
-- name: K3s Bootstrap Placeholder
-  hosts: all
-  become: true
-
-  tasks:
-    - name: Placeholder task
-      debug:
-        msg: "K3s bootstrap not implemented yet"
-</file>
-
 <file path="ansible/playbooks/os-bootstrap.yml">
 ---
 
@@ -779,8 +964,32 @@ ansible_python_interpreter: /usr/bin/python3
     - os-bootstrap
 </file>
 
-<file path="ansible/playbooks/site.yml">
+<file path="ansible/playbooks/os-rollback.yml">
 ---
+- name: OS Rollback
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Restore sshd config
+      ansible.builtin.copy:
+        src: /root/backup/sshd_config
+        dest: /etc/ssh/sshd_config
+        remote_src: true
+        mode: "0644"
+
+    - name: Restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+</file>
+
+<file path="ansible/playbooks/vault.yml">
+---
+- name: Vault Playbook
+  hosts: all
+  gather_facts: false
+  tasks: []
 </file>
 
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
@@ -793,36 +1002,6 @@ ansible_python_interpreter: /usr/bin/python3
 
 <file path="ansible/roles/os-bootstrap/tasks/cleanup.yml">
 ---
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
----
-
-
-- name: Enable fail2ban
-  service:
-    name: fail2ban
-    enabled: true
-    state: started
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
----
-
-- name: Install utility packages
-  apt:
-    name:
-      - curl
-      - jq
-      - vim
-      - git
-      - unzip
-      - htop
-      - fail2ban
-      - socat
-      - conntrack
-    state: present
-    update_cache: true
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/users.yml">
@@ -1148,47 +1327,6 @@ jobs:
           ansible-lint ansible/
 </file>
 
-<file path=".github/workflows/ansible-validate.yaml">
----
-
-name: Ansible Validate
-
-on:
-  pull_request:
-    paths:
-      - "ansible/**"
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Ansible
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible
-
-      - name: Use project ansible.cfg
-        run: echo "ANSIBLE_CONFIG=ansible/ansible.cfg" >> $GITHUB_ENV
-
-      - name: Syntax check OS bootstrap
-        run: |
-          ansible-playbook \
-            -i ansible/inventories/lab/hosts.ini \
-            ansible/playbooks/os-bootstrap.yml \
-            --syntax-check
-
-      - name: Syntax check K3s
-        run: |
-          ansible-playbook \
-            -i ansible/inventories/lab/hosts.ini \
-            ansible/playbooks/k3s-bootstrap.yml \
-            --syntax-check
-</file>
-
 <file path=".github/workflows/security-ci.yaml">
 ---
 name: Security CI
@@ -1229,94 +1367,80 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
 </file>
 
-<file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
+<file path="ansible/playbooks/k3s-bootstrap.yml">
 ---
+- name: K3s Bootstrap Placeholder
+  hosts: all
+  become: true
 
-
-- name: Allow SSH
-  community.general.ufw:
-    rule: allow
-    port: 22
-
-- name: Allow HTTP
-  ufw:
-    rule: allow
-    port: 80
-
-- name: Allow HTTPS
-  ufw:
-    rule: allow
-    port: 443
-
-- name: Enable firewall
-  ufw:
-    state: enabled
+  tasks:
+    - name: Placeholder task
+      ansible.builtin.debug:
+        msg: "K3s bootstrap not implemented yet"
 </file>
 
-<file path="ansible/roles/os-bootstrap/tasks/ssh.yml">
+<file path="ansible/playbooks/site.yml">
 ---
-
-- name: Create backup directory
-  ansible.builtin.file:
-    path: /root/backup
-    state: directory
-    mode: '0755'
-
-- name: Backup sshd config
-  ansible.builtin.copy:
-    src: /etc/ssh/sshd_config
-    dest: /root/backup/sshd_config
-    remote_src: true
-
-- name: Disable password authentication
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: '^#?PasswordAuthentication'
-    line: 'PasswordAuthentication no'
-
-- name: Disable root login
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: '^#?PermitRootLogin'
-    line: 'PermitRootLogin no'
-
-- name: Disable X11 forwarding
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: '^#?X11Forwarding'
-    line: 'X11Forwarding no'
-
-- name: Reduce brute force attempts
-  lineinfile:
-    path: /etc/ssh/sshd_config
-    regexp: '^#?MaxAuthTries'
-    line: 'MaxAuthTries 3'
-
-- name: Validate ssh config before apply
-  command: sshd -t
-  changed_when: false
-
-
-- name: Reload SSH safely
-  service:
-    name: ssh
-    state: reloaded
+- name: Site Playbook
+  hosts: all
+  gather_facts: false
+  tasks: []
 </file>
 
-<file path="ansible/roles/os-bootstrap/tasks/sysctl.yml">
+<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
 ---
 
+- name: Enable fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
+</file>
 
-- name: Enable IP forwarding
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
+<file path="ansible/roles/os-bootstrap/tasks/main.yml">
+---
+# Main Task Loader
+
+- name: Users setup
+  ansible.builtin.import_tasks: users.yml
+
+- name: Package installation
+  ansible.builtin.import_tasks: packages.yml
+
+- name: SSH configuration
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Firewall setup
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: Fail2ban setup
+  ansible.builtin.import_tasks: fail2ban.yml
+
+- name: Sysctl configuration
+  ansible.builtin.import_tasks: sysctl.yml
+</file>
+
+<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
+---
+- name: Install utility packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - jq
+      - vim
+      - git
+      - unzip
+      - htop
+      - fail2ban
+      - socat
+      - conntrack
     state: present
+    update_cache: true
 </file>
 
 <file path="repo_structure.txt">
 Folder PATH listing for volume Data
-Volume serial number is 00000049 C87A:83A4
+Volume serial number is 000000C5 C87A:83A4
 D:.
 |   .gitignore
 |   .pre-commit-config.yaml
@@ -1325,12 +1449,10 @@ D:.
 |   
 +---.github
 |   \---workflows
-|           ansible-lint.yaml
-|           ansible-validate.yaml
-|           gitleaks.yaml
-|           opentofu-security.yaml
-|           opentofu-validate.yaml
-|           yaml-lint.yaml
+|           ansible-ci.yaml
+|           infrastructure-deploy.yaml
+|           opentofu-ci.yaml
+|           security-ci.yaml
 |           
 +---ansible
 |   |   ansible.cfg
@@ -1391,10 +1513,24 @@ D:.
 |   \---vars
 +---helm
 \---opentofu
+    +---bootstrap
+    |   \---state-backend
+    |       |   bootstrap.tfvars
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   variables.tf
+    |       |   
+    |       \---scripts
+    |               apply.sh
+    |               destroy.sh
+    |               init.sh
+    |               plan.sh
+    |               
     +---environments
     |   +---dev
     |   \---lab
     |       |   .terraform.lock.hcl
+    |       |   backend.tf
     |       |   lab.tfplan
     |       |   main.tf
     |       |   outputs.tf
@@ -1433,6 +1569,88 @@ repos:
     rev: v8.18.0
     hooks:
       - id: gitleaks
+</file>
+
+<file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
+---
+
+- name: Allow SSH
+  community.general.ufw:
+    rule: allow
+    port: 22
+
+- name: Allow HTTP
+  community.general.ufw:
+    rule: allow
+    port: 80
+
+- name: Allow HTTPS
+  community.general.ufw:
+    rule: allow
+    port: 443
+
+- name: Enable firewall
+  community.general.ufw:
+    state: enabled
+</file>
+
+<file path="ansible/roles/os-bootstrap/tasks/ssh.yml">
+---
+- name: Create backup directory
+  ansible.builtin.file:
+    path: /root/backup
+    state: directory
+    mode: "0755"
+
+- name: Backup sshd config
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: /root/backup/sshd_config
+    remote_src: true
+    mode: "0644"
+
+- name: Disable password authentication
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PasswordAuthentication'
+    line: 'PasswordAuthentication no'
+
+- name: Disable root login
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin no'
+
+- name: Disable X11 forwarding
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?X11Forwarding'
+    line: 'X11Forwarding no'
+
+- name: Reduce brute force attempts
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?MaxAuthTries'
+    line: 'MaxAuthTries 3'
+
+- name: Validate ssh config before apply
+  ansible.builtin.command: sshd -t
+  changed_when: false
+
+- name: Reload SSH safely
+  ansible.builtin.service:
+    name: ssh
+    state: reloaded
+</file>
+
+<file path="ansible/roles/os-bootstrap/tasks/sysctl.yml">
+---
+
+- name: Enable IP forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
 </file>
 
 </files>
