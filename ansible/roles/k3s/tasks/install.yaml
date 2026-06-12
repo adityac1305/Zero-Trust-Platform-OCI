@@ -42,12 +42,12 @@
 
 - name: Wait for K3s node token
   ansible.builtin.wait_for:
-    path: /var/lib/rancher/k3s/server/node-token
+    path: "{{ k3s_data_dir }}/server/node-token"
     timeout: 300
 
 - name: Verify K3s
   ansible.builtin.command:
-    cmd: k3s kubectl get nodes
+    cmd: kubectl --kubeconfig {{ k3s_kubeconfig_path }} get nodes
   register: k3s_nodes
   changed_when: false
 

@@ -609,27 +609,6 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
-<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
----
-
-- name: Verify /data is mounted
-  ansible.builtin.command:
-    cmd: mountpoint -q /data
-  register: k3s_mount_check
-  failed_when: k3s_mount_check.rc != 0
-  changed_when: false
-
-- name: Show disk usage
-  ansible.builtin.command:
-    cmd: df -h /data
-  register: k3s_df_output
-  changed_when: false
-
-- name: Debug disk usage
-  ansible.builtin.debug:
-    var: k3s_df_output.stdout_lines
-</file>
-
 <file path="opentofu/bootstrap/state-backend/main.tf">
 terraform {
   required_version = ">= 1.6.0"
@@ -1012,65 +991,6 @@ ansible_python_interpreter: /usr/bin/python3
   tasks: []
 </file>
 
-<file path="ansible/roles/k3s/tasks/install.yaml">
----
-
-- name: Get installed K3s version
-  ansible.builtin.command:
-    cmd: k3s --version
-  register: k3s_installed_version
-  failed_when: false
-  changed_when: false
-
-- name: Download K3s install script
-  ansible.builtin.get_url:
-    url: https://get.k3s.io
-    dest: /tmp/k3s-install.sh
-    mode: "0755"
-
-- name: Install K3s
-  ansible.builtin.command: >
-    /bin/bash /tmp/k3s-install.sh
-  environment:
-    INSTALL_K3S_VERSION: "{{ k3s_version }}"
-    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
-  args:
-    creates: /usr/local/bin/k3s
-  when:
-    - k3s_installed_version.rc != 0 or
-      k3s_version not in k3s_installed_version.stdout
-
-- name: Enable K3s service
-  ansible.builtin.systemd:
-    name: k3s
-    enabled: true
-    state: started
-
-- name: Wait for K3s service
-  ansible.builtin.systemd:
-    name: k3s
-    state: started
-  register: k3s_service
-  retries: 10
-  delay: 15
-  until: k3s_service.status.ActiveState == "active"
-
-- name: Wait for K3s node token
-  ansible.builtin.wait_for:
-    path: /var/lib/rancher/k3s/server/node-token
-    timeout: 300
-
-- name: Verify K3s
-  ansible.builtin.command:
-    cmd: k3s kubectl get nodes
-  register: k3s_nodes
-  changed_when: false
-
-- name: Display node status
-  ansible.builtin.debug:
-    var: k3s_nodes.stdout_lines
-</file>
-
 <file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
 ---
 - name: Ensure kube directory exists
@@ -1113,6 +1033,27 @@ ansible_python_interpreter: /usr/bin/python3
 
 - name: Configure kubeconfig
   ansible.builtin.import_tasks: kubeconfig.yaml
+</file>
+
+<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
+---
+
+- name: Verify /data is mounted
+  ansible.builtin.command:
+    cmd: mountpoint -q /data
+  register: k3s_mount_check
+  failed_when: k3s_mount_check.rc != 0
+  changed_when: false
+
+- name: Show disk usage
+  ansible.builtin.command:
+    cmd: df -h /data
+  register: k3s_df_output
+  changed_when: false
+
+- name: Debug disk usage
+  ansible.builtin.debug:
+    var: k3s_df_output.stdout_lines
 </file>
 
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
@@ -1356,6 +1297,65 @@ jobs:
             -i inventory/hosts.ini \
             ansible/playbooks/site.yml \
             --private-key key.pem
+</file>
+
+<file path="ansible/roles/k3s/tasks/install.yaml">
+---
+
+- name: Get installed K3s version
+  ansible.builtin.command:
+    cmd: k3s --version
+  register: k3s_installed_version
+  failed_when: false
+  changed_when: false
+
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+
+- name: Install K3s
+  ansible.builtin.command: >
+    /bin/bash /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
+  args:
+    creates: /usr/local/bin/k3s
+  when:
+    - k3s_installed_version.rc != 0 or
+      k3s_version not in k3s_installed_version.stdout
+
+- name: Enable K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Wait for K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    state: started
+  register: k3s_service
+  retries: 10
+  delay: 15
+  until: k3s_service.status.ActiveState == "active"
+
+- name: Wait for K3s node token
+  ansible.builtin.wait_for:
+    path: "{{ k3s_data_dir }}/server/node-token"
+    timeout: 300
+
+- name: Verify K3s
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ k3s_kubeconfig_path }} get nodes
+  register: k3s_nodes
+  changed_when: false
+
+- name: Display node status
+  ansible.builtin.debug:
+    var: k3s_nodes.stdout_lines
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
