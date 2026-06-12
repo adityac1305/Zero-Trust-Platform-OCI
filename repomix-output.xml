@@ -609,27 +609,6 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
-<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
----
-
-- name: Verify /data is mounted
-  ansible.builtin.command:
-    cmd: mountpoint -q /data
-  register: k3s_mount_check
-  failed_when: k3s_mount_check.rc != 0
-  changed_when: false
-
-- name: Show disk usage
-  ansible.builtin.command:
-    cmd: df -h /data
-  register: k3s_df_output
-  changed_when: false
-
-- name: Debug disk usage
-  ansible.builtin.debug:
-    var: k3s_df_output.stdout_lines
-</file>
-
 <file path="opentofu/bootstrap/state-backend/main.tf">
 terraform {
   required_version = ">= 1.6.0"
@@ -1057,12 +1036,12 @@ ansible_python_interpreter: /usr/bin/python3
 
 - name: Wait for K3s node token
   ansible.builtin.wait_for:
-    path: /var/lib/rancher/k3s/server/node-token
+    path: "{{ k3s_data_dir }}/server/node-token"
     timeout: 300
 
 - name: Verify K3s
   ansible.builtin.command:
-    cmd: k3s kubectl get nodes
+    cmd: kubectl --kubeconfig {{ k3s_kubeconfig_path }} get nodes
   register: k3s_nodes
   changed_when: false
 
@@ -1113,6 +1092,27 @@ ansible_python_interpreter: /usr/bin/python3
 
 - name: Configure kubeconfig
   ansible.builtin.import_tasks: kubeconfig.yaml
+</file>
+
+<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
+---
+
+- name: Verify /data is mounted
+  ansible.builtin.command:
+    cmd: mountpoint -q /data
+  register: k3s_mount_check
+  failed_when: k3s_mount_check.rc != 0
+  changed_when: false
+
+- name: Show disk usage
+  ansible.builtin.command:
+    cmd: df -h /data
+  register: k3s_df_output
+  changed_when: false
+
+- name: Debug disk usage
+  ansible.builtin.debug:
+    var: k3s_df_output.stdout_lines
 </file>
 
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
