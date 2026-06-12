@@ -530,93 +530,6 @@ collections:
     var: k3s_nodes.stdout_lines
 </file>
 
-<file path="ansible/roles/k3s/tasks/prereqs.yaml">
----
-
-- name: Install K3s dependencies
-  ansible.builtin.apt:
-    name:
-      - curl
-      - wget
-      - ca-certificates
-      - apt-transport-https
-      - gnupg
-      - software-properties-common
-      - iptables
-      - iproute2
-      - ebtables
-      - ethtool
-    state: present
-    update_cache: true
-
-#################################################
-# KERNEL MODULES (CRITICAL FOR K3s)
-#################################################
-
-- name: Load required kernel modules
-  ansible.builtin.modprobe:
-    name: "{{ item }}"
-    state: present
-  loop:
-    - br_netfilter
-    - overlay
-
-- name: Persist kernel modules for reboot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/k3s.conf
-    content: |
-      br_netfilter
-      overlay
-    mode: "0644"
-
-#################################################
-# SYSCTL SAFE APPLICATION (OCI SAFE)
-#################################################
-
-- name: Set safe sysctl parameters for K3s
-  ansible.posix.sysctl:
-    name: "{{ item.name }}"
-    value: "{{ item.value }}"
-    state: present
-    reload: true
-    ignoreerrors: true
-  loop:
-    - { name: "net.ipv4.ip_forward", value: "1" }
-    - { name: "net.bridge.bridge-nf-call-iptables", value: "1" }
-    - { name: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
-
-#################################################
-# GUARANTEE BRIDGE MODULE IS ACTIVE BEFORE SYSCTL EDGE CASES
-#################################################
-
-- name: Ensure bridge sysctl path exists before enforcing strict rules
-  ansible.builtin.stat:
-    path: /proc/sys/net/bridge
-  register: bridge_sysctl
-
-- name: Warn if bridge sysctl is not available
-  ansible.builtin.debug:
-    msg: "Bridge sysctl not available yet - kernel module may not be fully initialized"
-  when: not bridge_sysctl.stat.exists
-
-#################################################
-# SYSTEM NETWORKING TUNING (K3s REQUIREMENT)
-#################################################
-
-- name: Ensure system networking config file exists
-  ansible.builtin.copy:
-    dest: /etc/sysctl.d/99-k3s.conf
-    mode: "0644"
-    content: |
-      net.ipv4.ip_forward = 1
-      net.bridge.bridge-nf-call-iptables = 1
-      net.bridge.bridge-nf-call-ip6tables = 1
-
-- name: Reload sysctl safely
-  ansible.builtin.command: sysctl --system
-  changed_when: false
-</file>
-
 <file path="opentofu/bootstrap/state-backend/main.tf">
 terraform {
   required_version = ">= 1.6.0"
@@ -1022,6 +935,102 @@ ansible_python_interpreter: /usr/bin/python3
     owner: ubuntu
     group: ubuntu
     mode: "0600"
+</file>
+
+<file path="ansible/roles/k3s/tasks/prereqs.yaml">
+---
+
+- name: Install K3s dependencies
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - ca-certificates
+      - apt-transport-https
+      - gnupg
+      - software-properties-common
+      - iptables
+      - iproute2
+      - ebtables
+      - ethtool
+    state: present
+    update_cache: true
+
+#################################################
+# KERNEL MODULES (CRITICAL FOR K3s)
+#################################################
+
+- name: Load required kernel modules
+  community.general.modprobe:
+    name: "{{item}}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+
+- name: Persist kernel modules for reboot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k3s.conf
+    content: |
+      br_netfilter
+      overlay
+    mode: "0644"
+
+#################################################
+# SAFE SYSCTL FOR K3s
+#################################################
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+
+- name: Check bridge sysctl availability
+  ansible.builtin.stat:
+    path: /proc/sys/net/bridge
+  register: k3s_bridge_sysctl
+  changed_when: false
+
+- name: Apply bridge netfilter sysctl (if supported)
+  ansible.posix.sysctl:
+    name: "{{item}}"
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+  loop:
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables
+  when: k3s_bridge_sysctl.stat.exists
+
+#################################################
+# OPTIONAL WARNING
+#################################################
+
+- name: Warn if bridge sysctl is unavailable
+  ansible.builtin.debug:
+    msg: "Bridge sysctl not available; kernel module may not be fully ready"
+  when: not k3s_bridge_sysctl.stat.exists
+
+#################################################
+# SYSTEM NETWORKING TUNING
+#################################################
+
+- name: Ensure system networking config file exists
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k3s.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+- name: Reload sysctl safely
+  ansible.builtin.command: sysctl --system
+  changed_when: false
 </file>
 
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
