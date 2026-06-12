@@ -52,11 +52,9 @@
   changed_when: false
 
 
-- name: Fail if disk is already mounted
-  ansible.builtin.fail:
-    msg: >
-      {{ k3s_data_disk }} is already mounted.
-      Refusing to format to prevent data loss.
+- name: Skip formatting when disk is already mounted
+  ansible.builtin.debug:
+    msg: "{{ k3s_data_disk }} already mounted, skipping format"
   when:
     - k3s_disk_mount_check.rc == 0
 
@@ -71,6 +69,7 @@
   changed_when: true
   when:
     - k3s_fs_type.stdout != "ext4"
+    - k3s_disk_mount_check.rc != 0
 
 
 #################################################
