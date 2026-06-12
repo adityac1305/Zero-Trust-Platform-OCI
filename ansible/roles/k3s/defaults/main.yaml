@@ -1,0 +1,9 @@
+---
+
+k3s_version: "v1.33.1+k3s1"
+
+k3s_install_args: >-
+  --write-kubeconfig-mode 644
+  --tls-san {{ ansible_host }}
+
+k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
