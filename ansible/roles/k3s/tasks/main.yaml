@@ -1,5 +1,11 @@
 ---
 
+- name: Setup storage
+  ansible.builtin.import_tasks: storage.yaml
+
+- name: Validate storage
+  ansible.builtin.import_tasks: validate_disk.yaml
+
 - name: Install prerequisites
   ansible.builtin.import_tasks: prereqs.yaml
 

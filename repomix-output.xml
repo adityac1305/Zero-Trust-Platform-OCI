@@ -63,6 +63,8 @@ ansible/roles/k3s/tasks/install.yaml
 ansible/roles/k3s/tasks/kubeconfig.yaml
 ansible/roles/k3s/tasks/main.yaml
 ansible/roles/k3s/tasks/prereqs.yaml
+ansible/roles/k3s/tasks/storage.yaml
+ansible/roles/k3s/tasks/validate_disk.yaml
 ansible/roles/os-bootstrap/defaults/main.yml
 ansible/roles/os-bootstrap/handlers/main.yml
 ansible/roles/os-bootstrap/tasks/cleanup.yml
@@ -113,37 +115,12 @@ This section contains the contents of the repository's files.
 
 </file>
 
-<file path="ansible/roles/k3s/defaults/main.yaml">
----
-
-k3s_version: "v1.33.1+k3s1"
-
-k3s_install_args: >-
-  --write-kubeconfig-mode 644
-  --tls-san {{ ansible_host }}
-
-k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
-</file>
-
 <file path="ansible/roles/k3s/handlers/main.yaml">
 ---
 - name: Restart K3s
   ansible.builtin.systemd:
     name: k3s
     state: restarted
-</file>
-
-<file path="ansible/roles/k3s/tasks/main.yaml">
----
-
-- name: Install prerequisites
-  ansible.builtin.import_tasks: prereqs.yaml
-
-- name: Install K3s
-  ansible.builtin.import_tasks: install.yaml
-
-- name: Configure kubeconfig
-  ansible.builtin.import_tasks: kubeconfig.yaml
 </file>
 
 <file path="ansible/scripts/backup-configs.sh">
@@ -480,54 +457,177 @@ collections:
   - name: ansible.posix
 </file>
 
-<file path="ansible/roles/k3s/tasks/install.yaml">
+<file path="ansible/roles/k3s/defaults/main.yaml">
 ---
 
-- name: Get installed K3s version
+k3s_version: "v1.33.1+k3s1"
+k3s_data_dir: /data/platform/kubernetes/k3s
+
+k3s_install_args: >-
+  --write-kubeconfig-mode 644
+  --tls-san {{ ansible_host }}
+  --data-dir {{ k3s_data_dir }}
+
+k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+</file>
+
+<file path="ansible/roles/k3s/tasks/storage.yaml">
+---
+
+#################################################
+# FIXED DATA DISK (/dev/sdb → /data)
+#################################################
+
+- name: Set data disk device (explicit OCI volume)
+  ansible.builtin.set_fact:
+    k3s_data_disk: /dev/sdb
+    k3s_data_label: platform-data
+
+- name: Validate data disk exists
+  ansible.builtin.stat:
+    path: "{{ k3s_data_disk }}"
+  register: k3s_disk_check
+
+- name: Fail if disk not found
+  ansible.builtin.fail:
+    msg: "Data disk {{ k3s_data_disk }} not found"
+  when: not k3s_disk_check.stat.exists
+
+
+#################################################
+# FORMAT DISK SAFELY
+#################################################
+
+- name: Check filesystem type
   ansible.builtin.command:
-    cmd: k3s --version
-  register: k3s_installed_version
+    cmd: blkid -o value -s TYPE {{ k3s_data_disk }}
+  register: k3s_fs_type
   failed_when: false
   changed_when: false
 
-- name: Download K3s install script
-  ansible.builtin.get_url:
-    url: https://get.k3s.io
-    dest: /tmp/k3s-install.sh
-    mode: "0755"
 
-- name: Install K3s
-  ansible.builtin.command: >
-    /bin/bash /tmp/k3s-install.sh
-  environment:
-    INSTALL_K3S_VERSION: "{{ k3s_version }}"
-    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
-  args:
-    creates: /usr/local/bin/k3s
-  when:
-    - k3s_installed_version.rc != 0 or
-      k3s_version not in k3s_installed_version.stdout
-
-- name: Enable K3s service
-  ansible.builtin.systemd:
-    name: k3s
-    enabled: true
-    state: started
-
-- name: Wait for K3s node token
-  ansible.builtin.wait_for:
-    path: /var/lib/rancher/k3s/server/node-token
-    timeout: 300
-
-- name: Verify K3s
+- name: Check existing filesystem information
   ansible.builtin.command:
-    cmd: k3s kubectl get nodes
-  register: k3s_nodes
+    cmd: blkid {{ k3s_data_disk }}
+  register: k3s_blkid_result
+  failed_when: false
   changed_when: false
 
-- name: Display node status
+
+#################################################
+# SAFETY CHECK BEFORE FORMAT
+#################################################
+
+- name: Check if disk is already mounted
+  ansible.builtin.command:
+    cmd: findmnt {{ k3s_data_disk }}
+  register: k3s_disk_mount_check
+  failed_when: false
+  changed_when: false
+
+
+- name: Fail if disk is already mounted
+  ansible.builtin.fail:
+    msg: >
+      {{ k3s_data_disk }} is already mounted.
+      Refusing to format to prevent data loss.
+  when:
+    - k3s_disk_mount_check.rc == 0
+
+
+#################################################
+# FORMAT ONLY IF REQUIRED
+#################################################
+
+- name: Format disk with ext4 + label
+  ansible.builtin.command:
+    cmd: mkfs.ext4 -F -L {{ k3s_data_label }} {{ k3s_data_disk }}
+  changed_when: true
+  when:
+    - k3s_fs_type.stdout != "ext4"
+
+
+#################################################
+# GET UUID (SAFE MOUNT METHOD)
+#################################################
+
+- name: Get disk UUID
+  ansible.builtin.command:
+    cmd: blkid -s UUID -o value {{ k3s_data_disk }}
+  register: k3s_disk_uuid
+  changed_when: false
+
+
+- name: Set UUID fact
+  ansible.builtin.set_fact:
+    k3s_data_uuid: "{{ k3s_disk_uuid.stdout }}"
+
+
+#################################################
+# MOUNT /data
+#################################################
+
+- name: Create /data root directory
+  ansible.builtin.file:
+    path: /data
+    state: directory
+    mode: "0755"
+
+
+- name: Mount data disk using UUID
+  ansible.posix.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: mounted
+
+
+- name: Persist mount in fstab
+  ansible.posix.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: present
+
+
+#################################################
+# DIRECTORY STRUCTURE
+#################################################
+
+- name: Create required /data structure
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /data/applications, owner: ubuntu, mode: "0755"}
+    - {path: /data/platform, owner: root, mode: "0755"}
+    - {path: /data/platform/kubernetes, owner: root, mode: "0755"}
+    - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
+</file>
+
+<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
+---
+
+- name: Verify /data is mounted
+  ansible.builtin.command:
+    cmd: mountpoint -q /data
+  register: k3s_mount_check
+  failed_when: k3s_mount_check.rc != 0
+  changed_when: false
+
+- name: Show disk usage
+  ansible.builtin.command:
+    cmd: df -h /data
+  register: k3s_df_output
+  changed_when: false
+
+- name: Debug disk usage
   ansible.builtin.debug:
-    var: k3s_nodes.stdout_lines
+    var: k3s_df_output.stdout_lines
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -912,6 +1012,65 @@ ansible_python_interpreter: /usr/bin/python3
   tasks: []
 </file>
 
+<file path="ansible/roles/k3s/tasks/install.yaml">
+---
+
+- name: Get installed K3s version
+  ansible.builtin.command:
+    cmd: k3s --version
+  register: k3s_installed_version
+  failed_when: false
+  changed_when: false
+
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+
+- name: Install K3s
+  ansible.builtin.command: >
+    /bin/bash /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
+  args:
+    creates: /usr/local/bin/k3s
+  when:
+    - k3s_installed_version.rc != 0 or
+      k3s_version not in k3s_installed_version.stdout
+
+- name: Enable K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Wait for K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    state: started
+  register: k3s_service
+  retries: 10
+  delay: 15
+  until: k3s_service.status.ActiveState == "active"
+
+- name: Wait for K3s node token
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+    timeout: 300
+
+- name: Verify K3s
+  ansible.builtin.command:
+    cmd: k3s kubectl get nodes
+  register: k3s_nodes
+  changed_when: false
+
+- name: Display node status
+  ansible.builtin.debug:
+    var: k3s_nodes.stdout_lines
+</file>
+
 <file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
 ---
 - name: Ensure kube directory exists
@@ -937,100 +1096,23 @@ ansible_python_interpreter: /usr/bin/python3
     mode: "0600"
 </file>
 
-<file path="ansible/roles/k3s/tasks/prereqs.yaml">
+<file path="ansible/roles/k3s/tasks/main.yaml">
 ---
 
-- name: Install K3s dependencies
-  ansible.builtin.apt:
-    name:
-      - curl
-      - wget
-      - ca-certificates
-      - apt-transport-https
-      - gnupg
-      - software-properties-common
-      - iptables
-      - iproute2
-      - ebtables
-      - ethtool
-    state: present
-    update_cache: true
+- name: Setup storage
+  ansible.builtin.import_tasks: storage.yaml
 
-#################################################
-# KERNEL MODULES (CRITICAL FOR K3s)
-#################################################
+- name: Validate storage
+  ansible.builtin.import_tasks: validate_disk.yaml
 
-- name: Load required kernel modules
-  community.general.modprobe:
-    name: "{{item}}"
-    state: present
-  loop:
-    - br_netfilter
-    - overlay
+- name: Install prerequisites
+  ansible.builtin.import_tasks: prereqs.yaml
 
-- name: Persist kernel modules for reboot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/k3s.conf
-    content: |
-      br_netfilter
-      overlay
-    mode: "0644"
+- name: Install K3s
+  ansible.builtin.import_tasks: install.yaml
 
-#################################################
-# SAFE SYSCTL FOR K3s
-#################################################
-
-- name: Enable IPv4 forwarding
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-
-- name: Check bridge sysctl availability
-  ansible.builtin.stat:
-    path: /proc/sys/net/bridge
-  register: k3s_bridge_sysctl
-  changed_when: false
-
-- name: Apply bridge netfilter sysctl (if supported)
-  ansible.posix.sysctl:
-    name: "{{item}}"
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-  loop:
-    - net.bridge.bridge-nf-call-iptables
-    - net.bridge.bridge-nf-call-ip6tables
-  when: k3s_bridge_sysctl.stat.exists
-
-#################################################
-# OPTIONAL WARNING
-#################################################
-
-- name: Warn if bridge sysctl is unavailable
-  ansible.builtin.debug:
-    msg: "Bridge sysctl not available; kernel module may not be fully ready"
-  when: not k3s_bridge_sysctl.stat.exists
-
-#################################################
-# SYSTEM NETWORKING TUNING
-#################################################
-
-- name: Ensure system networking config file exists
-  ansible.builtin.copy:
-    dest: /etc/sysctl.d/99-k3s.conf
-    mode: "0644"
-    content: |
-      net.ipv4.ip_forward = 1
-      net.bridge.bridge-nf-call-iptables = 1
-      net.bridge.bridge-nf-call-ip6tables = 1
-
-- name: Reload sysctl safely
-  ansible.builtin.command: sysctl --system
-  changed_when: false
+- name: Configure kubeconfig
+  ansible.builtin.import_tasks: kubeconfig.yaml
 </file>
 
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
@@ -1323,6 +1405,102 @@ repos:
 
   roles:
     - k3s
+</file>
+
+<file path="ansible/roles/k3s/tasks/prereqs.yaml">
+---
+
+- name: Install K3s dependencies
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - ca-certificates
+      - apt-transport-https
+      - gnupg
+      - software-properties-common
+      - iptables
+      - iproute2
+      - ebtables
+      - ethtool
+    state: present
+    update_cache: true
+
+#################################################
+# KERNEL MODULES (CRITICAL FOR K3s)
+#################################################
+
+- name: Load required kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+
+- name: Persist kernel modules for reboot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k3s.conf
+    content: |
+      br_netfilter
+      overlay
+    mode: "0644"
+
+#################################################
+# SAFE SYSCTL FOR K3s
+#################################################
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+
+- name: Check bridge sysctl availability
+  ansible.builtin.stat:
+    path: /proc/sys/net/bridge
+  register: k3s_bridge_sysctl
+  changed_when: false
+
+- name: Apply bridge netfilter sysctl (if supported)
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+  loop:
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables
+  when: k3s_bridge_sysctl.stat.exists
+
+#################################################
+# OPTIONAL WARNING
+#################################################
+
+- name: Warn if bridge sysctl is unavailable
+  ansible.builtin.debug:
+    msg: "Bridge sysctl not available; kernel module may not be fully ready"
+  when: not k3s_bridge_sysctl.stat.exists
+
+#################################################
+# SYSTEM NETWORKING TUNING
+#################################################
+
+- name: Ensure system networking config file exists
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k3s.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+- name: Reload sysctl safely
+  ansible.builtin.command: sysctl --system
+  changed_when: false
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
@@ -1725,9 +1903,103 @@ jobs:
   ansible.builtin.import_tasks: sysctl.yml
 </file>
 
+<file path=".github/workflows/ansible-ci.yaml">
+---
+
+name: Ansible CI
+
+on:
+  pull_request:
+    paths:
+      - "ansible/**"
+  workflow_dispatch:
+
+jobs:
+
+  syntax:
+    name: Ansible Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible + dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
+
+      - name: Syntax Check OS Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/os-bootstrap.yml \
+            --syntax-check
+
+
+  lint:
+    name: Ansible Lint
+    runs-on: ubuntu-latest
+    needs: syntax
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible + lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip ansible-lint
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
+
+      - name: Run ansible-lint (entire repo)
+        run: |
+          ansible-lint ansible/
+
+      - name: Syntax Check K3s Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-bootstrap.yml \
+            --syntax-check
+</file>
+
+<file path="ansible/playbooks/site.yml">
+---
+
+- name: OS Bootstrap
+  import_playbook: os-bootstrap.yml
+
+- name: K3s Bootstrap
+  import_playbook: k3s-bootstrap.yml
+</file>
+
 <file path="repo_structure.txt">
 Folder PATH listing for volume Data
-Volume serial number is 0000003A C87A:83A4
+Volume serial number is 0000009C C87A:83A4
 D:.
 |   .gitignore
 |   .pre-commit-config.yaml
@@ -1778,6 +2050,8 @@ D:.
 |   |   |   |       kubeconfig.yaml
 |   |   |   |       main.yaml
 |   |   |   |       prereqs.yaml
+|   |   |   |       storage.yaml
+|   |   |   |       validate_disk.yaml
 |   |   |   |       
 |   |   |   \---templates
 |   |   \---os-bootstrap
@@ -1874,100 +2148,6 @@ D:.
             init.sh
             plan.sh
             retry-apply.sh
-</file>
-
-<file path=".github/workflows/ansible-ci.yaml">
----
-
-name: Ansible CI
-
-on:
-  pull_request:
-    paths:
-      - "ansible/**"
-  workflow_dispatch:
-
-jobs:
-
-  syntax:
-    name: Ansible Syntax Check
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Ansible + dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Syntax Check OS Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/os-bootstrap.yml \
-            --syntax-check
-
-
-  lint:
-    name: Ansible Lint
-    runs-on: ubuntu-latest
-    needs: syntax
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Ansible + lint
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip ansible-lint
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Run ansible-lint (entire repo)
-        run: |
-          ansible-lint ansible/
-
-      - name: Syntax Check K3s Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/k3s-bootstrap.yml \
-            --syntax-check
-</file>
-
-<file path="ansible/playbooks/site.yml">
----
-
-- name: OS Bootstrap
-  import_playbook: os-bootstrap.yml
-
-- name: K3s Bootstrap
-  import_playbook: k3s-bootstrap.yml
 </file>
 
 </files>

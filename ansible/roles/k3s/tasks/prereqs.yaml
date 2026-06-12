@@ -22,7 +22,7 @@
 
 - name: Load required kernel modules
   community.general.modprobe:
-    name: "{{item}}"
+    name: "{{ item }}"
     state: present
   loop:
     - br_netfilter
@@ -56,7 +56,7 @@
 
 - name: Apply bridge netfilter sysctl (if supported)
   ansible.posix.sysctl:
-    name: "{{item}}"
+    name: "{{ item }}"
     value: "1"
     state: present
     reload: true

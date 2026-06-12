@@ -31,6 +31,15 @@
     enabled: true
     state: started
 
+- name: Wait for K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    state: started
+  register: k3s_service
+  retries: 10
+  delay: 15
+  until: k3s_service.status.ActiveState == "active"
+
 - name: Wait for K3s node token
   ansible.builtin.wait_for:
     path: /var/lib/rancher/k3s/server/node-token
