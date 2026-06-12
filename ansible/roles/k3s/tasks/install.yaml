@@ -1,0 +1,47 @@
+---
+
+- name: Get installed K3s version
+  ansible.builtin.command:
+    cmd: k3s --version
+  register: k3s_installed_version
+  failed_when: false
+  changed_when: false
+
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+
+- name: Install K3s
+  ansible.builtin.command: >
+    /bin/bash /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
+  args:
+    creates: /usr/local/bin/k3s
+  when:
+    - k3s_installed_version.rc != 0 or
+      k3s_version not in k3s_installed_version.stdout
+
+- name: Enable K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Wait for K3s node token
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+    timeout: 300
+
+- name: Verify K3s
+  ansible.builtin.command:
+    cmd: k3s kubectl get nodes
+  register: k3s_nodes
+  changed_when: false
+
+- name: Display node status
+  ansible.builtin.debug:
+    var: k3s_nodes.stdout_lines

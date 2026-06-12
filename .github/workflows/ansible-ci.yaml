@@ -71,3 +71,11 @@ jobs:
       - name: Run ansible-lint (entire repo)
         run: |
           ansible-lint ansible/
+
+      - name: Syntax Check K3s Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-bootstrap.yml \
+            --syntax-check
