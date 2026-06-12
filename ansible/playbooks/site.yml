@@ -1,7 +1,5 @@
 ---
-
-- name: OS Bootstrap
-  import_playbook: os-bootstrap.yml
-
-- name: K3s Bootstrap
-  import_playbook: k3s-bootstrap.yml
+- name: Site Playbook
+  hosts: all
+  gather_facts: false
+  tasks: []

@@ -74,7 +74,7 @@ jobs:
     needs: plan
 
     environment:
-      name: lab
+      name: production
 
     defaults:
       run:
@@ -216,5 +216,5 @@ jobs:
           ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
           ansible-playbook \
             -i inventory/hosts.ini \
-            ansible/playbooks/site.yml \
+            ansible/playbooks/os-bootstrap.yml \
             --private-key key.pem

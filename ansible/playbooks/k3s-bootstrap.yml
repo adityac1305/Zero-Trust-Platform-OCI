@@ -1,8 +1,9 @@
 ---
-
-- name: K3s Bootstrap
-  hosts: k3s
+- name: K3s Bootstrap Placeholder
+  hosts: all
   become: true
 
-  roles:
-    - k3s
+  tasks:
+    - name: Placeholder task
+      ansible.builtin.debug:
+        msg: "K3s bootstrap not implemented yet"
