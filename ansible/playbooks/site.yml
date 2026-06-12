@@ -2,4 +2,3 @@
 
 - import_playbook: os-bootstrap.yml
 - import_playbook: k3s-bootstrap.yml
-
