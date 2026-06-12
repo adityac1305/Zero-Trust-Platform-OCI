@@ -24,4 +24,3 @@
     value: "1"
     state: present
     reload: true
-  ignore_errors: true

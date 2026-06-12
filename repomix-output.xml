@@ -105,6 +105,14 @@ repo_structure.txt
 <files>
 This section contains the contents of the repository's files.
 
+<file path="ansible/inventories/dev/group_vars/all.yml">
+
+</file>
+
+<file path="ansible/inventories/dev/hosts.ini">
+
+</file>
+
 <file path="ansible/roles/k3s/defaults/main.yaml">
 ---
 
@@ -131,21 +139,27 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
 - name: Get installed K3s version
   ansible.builtin.command:
     cmd: k3s --version
-  register: installed_k3s_version
+  register: k3s_installed_version
   failed_when: false
   changed_when: false
 
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+
 - name: Install K3s
-  ansible.builtin.shell: |
-    curl -sfL https://get.k3s.io | \
-    INSTALL_K3S_VERSION={{ k3s_version }} \
-    INSTALL_K3S_EXEC="{{ k3s_install_args }}" \
-    sh -
+  ansible.builtin.command: >
+    /bin/bash /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
   args:
-    executable: /bin/bash
+    creates: /usr/local/bin/k3s
   when:
-    - installed_k3s_version.rc != 0 or
-      k3s_version not in installed_k3s_version.stdout
+    - k3s_installed_version.rc != 0 or
+      k3s_version not in k3s_installed_version.stdout
 
 - name: Enable K3s service
   ansible.builtin.systemd:
@@ -167,31 +181,6 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
 - name: Display node status
   ansible.builtin.debug:
     var: k3s_nodes.stdout_lines
-</file>
-
-<file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
----
-- name: Ensure kube directory exists
-  ansible.builtin.file:
-    path: /home/ubuntu/.kube
-    state: directory
-    owner: ubuntu
-    group: ubuntu
-    mode: "0755"
-
-- name: Check kubeconfig exists
-  ansible.builtin.stat:
-    path: /home/ubuntu/.kube/config
-  register: kubeconfig_file
-
-- name: Copy kubeconfig
-  ansible.builtin.copy:
-    src: "{{ k3s_kubeconfig_path }}"
-    dest: /home/ubuntu/.kube/config
-    remote_src: true
-    owner: ubuntu
-    group: ubuntu
-    mode: "0600"
 </file>
 
 <file path="ansible/roles/k3s/tasks/main.yaml">
@@ -234,15 +223,6 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
     value: "1"
     state: present
     reload: true
-  ignore_errors: true
-</file>
-
-<file path="ansible/inventories/dev/group_vars/all.yml">
-
-</file>
-
-<file path="ansible/inventories/dev/hosts.ini">
-
 </file>
 
 <file path="ansible/scripts/backup-configs.sh">
@@ -486,12 +466,6 @@ variable "ssh_public_key" {
   type        = string
   description = "Public SSH key for the compute instance"
 }
-
-variable "k3s_api_allowed_cidr" {
-  type        = string
-  description = "CIDR allowed to access Kubernetes API (6443)"
-  default     = "0.0.0.0/0"
-}
 </file>
 
 <file path="opentofu/environments/lab/versions.tf">
@@ -585,6 +559,31 @@ collections:
   - name: ansible.posix
 </file>
 
+<file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
+---
+- name: Ensure kube directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.kube
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0755"
+
+- name: Check kubeconfig exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.kube/config
+  register: k3s_kubeconfig_file
+
+- name: Copy kubeconfig
+  ansible.builtin.copy:
+    src: "{{ k3s_kubeconfig_path }}"
+    dest: /home/ubuntu/.kube/config
+    remote_src: true
+    owner: ubuntu
+    group: ubuntu
+    mode: "0600"
+</file>
+
 <file path="opentofu/bootstrap/state-backend/main.tf">
 terraform {
   required_version = ">= 1.6.0"
@@ -671,229 +670,6 @@ ENVIRONMENT=${1:-lab}
 cd "opentofu/environments/${ENVIRONMENT}"
 
 tofu plan -out="${ENVIRONMENT}.tfplan"
-</file>
-
-<file path=".github/workflows/infrastructure-deploy.yaml">
----
-
-name: Infrastructure Deploy (CD)
-
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "opentofu/**"
-      - "ansible/**"
-
-  workflow_dispatch:
-
-jobs:
-
-  ############################################################
-  # 1. OPEN TOFU PLAN
-  ############################################################
-  plan:
-    if: github.event_name == 'push'
-    name: OpenTofu Plan
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup OpenTofu
-        uses: opentofu/setup-opentofu@v1
-
-      - name: Create OCI API Key File
-        run: |
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
-          chmod 600 oci_api_key.pem
-
-      - name: Initialize OpenTofu
-        run: |
-          tofu init -input=false -reconfigure
-
-      - name: Generate Plan
-        run: |
-          tofu plan \
-            -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
-            -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
-            -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
-            -var="region=${{ secrets.OCI_REGION }}" \
-            -var="compartment_ocid=${{ secrets.OCI_COMPARTMENT_OCID }}" \
-            -var="private_key_path=oci_api_key.pem" \
-            -var="ssh_public_key=${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
-            -out=tfplan
-
-      - name: Upload Terraform Plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: tofu-plan
-          path: opentofu/environments/lab/tfplan
-
-  ############################################################
-  # 2. APPLY
-  ############################################################
-  apply:
-    if: github.event_name == 'push'
-    name: OpenTofu Apply
-    runs-on: ubuntu-latest
-    needs: plan
-
-    environment:
-      name: lab
-
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup OpenTofu
-        uses: opentofu/setup-opentofu@v1
-
-      - name: Create OCI API Key File
-        run: |
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
-          chmod 600 oci_api_key.pem
-
-      - name: Initialize OpenTofu
-        run: |
-          tofu init -input=false -reconfigure
-
-      - name: Download Terraform Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: tofu-plan
-          path: opentofu/environments/lab
-
-      - name: Apply Infrastructure
-        run: tofu apply -auto-approve tfplan
-
-  ############################################################
-  # 3. GENERATE INVENTORY
-  ############################################################
-  inventory:
-    if: github.event_name == 'push'
-    name: Generate Inventory
-    runs-on: ubuntu-latest
-    needs: apply
-
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-
-    outputs:
-      vm_ip: ${{ steps.extract.outputs.vm_ip }}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup OpenTofu
-        uses: opentofu/setup-opentofu@v1
-
-      - name: Initialize OpenTofu
-        working-directory: opentofu/environments/lab
-        run: |
-          tofu init -input=false -reconfigure
-
-      - name: Extract VM IP
-        id: extract
-        working-directory: opentofu/environments/lab
-        run: |
-          PUBLIC_IP=$(tofu output -raw public_ip)
-          echo "vm_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-
-      - name: Create Inventory
-        run: |
-          mkdir -p inventory
-          echo "[k3s]" > inventory/hosts.ini
-          echo \
-          "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
-          >> inventory/hosts.ini
-
-      - name: Upload Inventory
-        uses: actions/upload-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory/hosts.ini
-
-  ############################################################
-  # 4. ANSIBLE
-  ############################################################
-  ansible:
-    if: github.event_name == 'push'
-    name: Run Ansible Bootstrap
-    runs-on: ubuntu-latest
-    needs: inventory
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download Inventory
-        uses: actions/download-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory
-
-      - name: Install Ansible
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
-
-      - name: Install Collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Create SSH Key
-        run: |
-          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
-          chmod 600 key.pem
-
-      - name: Wait for SSH
-        run: |
-          HOST=$(awk '/^[0-9]/{print $1}' inventory/hosts.ini)
-
-          for i in {1..30}; do
-            if ssh -o StrictHostKeyChecking=no \
-                 -i key.pem \
-                 ubuntu@$HOST exit 0; then
-              exit 0
-            fi
-
-            sleep 10
-          done
-
-          exit 1
-
-      - name: Run Ansible Playbook
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: "False"
-        run: |
-          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
-          ansible-playbook \
-            -i inventory/hosts.ini \
-            ansible/playbooks/site.yml \
-            --private-key key.pem
 </file>
 
 <file path=".github/workflows/opentofu-ci.yaml">
@@ -1210,22 +986,227 @@ ansible_python_interpreter: /usr/bin/python3
 ---
 </file>
 
-<file path="ansible/playbooks/k3s-bootstrap.yml">
+<file path=".github/workflows/infrastructure-deploy.yaml">
 ---
 
-- name: K3s Bootstrap
-  hosts: k3s
-  become: true
+name: Infrastructure Deploy (CD)
 
-  roles:
-    - k3s
-</file>
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "opentofu/**"
+      - "ansible/**"
 
-<file path="ansible/playbooks/site.yml">
----
+  workflow_dispatch:
 
-- import_playbook: os-bootstrap.yml
-- import_playbook: k3s-bootstrap.yml
+jobs:
+
+  ############################################################
+  # 1. OPEN TOFU PLAN
+  ############################################################
+  plan:
+    if: github.event_name == 'push'
+    name: OpenTofu Plan
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Create OCI API Key File
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+
+      - name: Initialize OpenTofu
+        run: |
+          tofu init -input=false -reconfigure
+
+      - name: Generate Plan
+        run: |
+          tofu plan \
+            -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
+            -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
+            -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
+            -var="region=${{ secrets.OCI_REGION }}" \
+            -var="compartment_ocid=${{ secrets.OCI_COMPARTMENT_OCID }}" \
+            -var="private_key_path=oci_api_key.pem" \
+            -var="ssh_public_key=${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
+            -out=tfplan
+
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab/tfplan
+
+  ############################################################
+  # 2. APPLY
+  ############################################################
+  apply:
+    if: github.event_name == 'push'
+    name: OpenTofu Apply
+    runs-on: ubuntu-latest
+    needs: plan
+
+    environment:
+      name: lab
+
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Create OCI API Key File
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+
+      - name: Initialize OpenTofu
+        run: |
+          tofu init -input=false -reconfigure
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab
+
+      - name: Apply Infrastructure
+        run: tofu apply -auto-approve tfplan
+
+  ############################################################
+  # 3. GENERATE INVENTORY
+  ############################################################
+  inventory:
+    if: github.event_name == 'push'
+    name: Generate Inventory
+    runs-on: ubuntu-latest
+    needs: apply
+
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+
+    outputs:
+      vm_ip: ${{ steps.extract.outputs.vm_ip }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Initialize OpenTofu
+        working-directory: opentofu/environments/lab
+        run: |
+          tofu init -input=false -reconfigure
+
+      - name: Extract VM IP
+        id: extract
+        working-directory: opentofu/environments/lab
+        run: |
+          PUBLIC_IP=$(tofu output -raw public_ip)
+          echo "vm_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+      - name: Create Inventory
+        run: |
+          mkdir -p inventory
+          echo "[k3s]" > inventory/hosts.ini
+          echo \
+          "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
+          >> inventory/hosts.ini
+
+      - name: Upload Inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory/hosts.ini
+
+  ############################################################
+  # 4. ANSIBLE
+  ############################################################
+  ansible:
+    if: github.event_name == 'push'
+    name: Run Ansible Bootstrap
+    runs-on: ubuntu-latest
+    needs: inventory
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Inventory
+        uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory
+
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
+
+      - name: Install Collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Create SSH Key
+        run: |
+          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+
+      - name: Wait for SSH
+        run: |
+          HOST=$(awk '/^[0-9]/{print $1}' inventory/hosts.ini)
+
+          for i in {1..30}; do
+            if ssh -o StrictHostKeyChecking=no \
+                 -i key.pem \
+                 ubuntu@$HOST exit 0; then
+              exit 0
+            fi
+
+            sleep 10
+          done
+
+          exit 1
+
+      - name: Run Ansible Playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+        run: |
+          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
+          ansible-playbook \
+            -i inventory/hosts.ini \
+            ansible/playbooks/site.yml \
+            --private-key key.pem
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
@@ -1256,91 +1237,6 @@ ansible_python_interpreter: /usr/bin/python3
     update_cache: true
 </file>
 
-<file path=".github/workflows/ansible-ci.yaml">
----
-
-name: Ansible CI
-
-on:
-  pull_request:
-    paths:
-      - "ansible/**"
-  workflow_dispatch:
-
-jobs:
-
-  syntax:
-    name: Ansible Syntax Check
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Ansible + dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Syntax Check OS Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/os-bootstrap.yml \
-            --syntax-check
-
-
-  lint:
-    name: Ansible Lint
-    runs-on: ubuntu-latest
-    needs: syntax
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Ansible + lint
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip ansible-lint
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Run ansible-lint (entire repo)
-        run: |
-          ansible-lint ansible/
-
-          
-      - name: Syntax Check K3s Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/k3s-bootstrap.yml \
-            --syntax-check
-</file>
-
 <file path=".pre-commit-config.yaml">
 ---
 
@@ -1349,6 +1245,17 @@ repos:
     rev: v8.18.0
     hooks:
       - id: gitleaks
+</file>
+
+<file path="ansible/playbooks/k3s-bootstrap.yml">
+---
+
+- name: K3s Bootstrap
+  hosts: k3s
+  become: true
+
+  roles:
+    - k3s
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
@@ -1680,6 +1587,87 @@ resource "oci_core_public_ip" "reserved_ip" {
 }
 </file>
 
+<file path=".github/workflows/security-ci.yaml">
+---
+name: Security CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: |
+          python3 -m pip install --upgrade pip
+          pip install yamllint
+
+      - name: Run yamllint
+        run: |
+          yamllint \
+            -d '{extends: default, rules: {truthy: disable}}' \
+            .
+
+  gitleaks:
+    name: Gitleaks Scan
+    runs-on: ubuntu-latest
+    needs: yaml-lint
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+</file>
+
+<file path="ansible/playbooks/site.yml">
+---
+
+- name: OS Bootstrap
+  import_playbook: os-bootstrap.yml
+
+- name: K3s Bootstrap
+  import_playbook: k3s-bootstrap.yml
+</file>
+
+<file path="ansible/roles/os-bootstrap/tasks/main.yml">
+---
+# Main Task Loader
+
+- name: Users setup
+  ansible.builtin.import_tasks: users.yml
+
+- name: Package installation
+  ansible.builtin.import_tasks: packages.yml
+
+- name: SSH configuration
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Firewall setup
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: Fail2ban setup
+  ansible.builtin.import_tasks: fail2ban.yml
+
+- name: Sysctl configuration
+  ansible.builtin.import_tasks: sysctl.yml
+</file>
+
 <file path="repo_structure.txt">
 Folder PATH listing for volume Data
 Volume serial number is 0000003A C87A:83A4
@@ -1831,75 +1819,88 @@ D:.
             retry-apply.sh
 </file>
 
-<file path=".github/workflows/security-ci.yaml">
+<file path=".github/workflows/ansible-ci.yaml">
 ---
-name: Security CI
+
+name: Ansible CI
 
 on:
   pull_request:
+    paths:
+      - "ansible/**"
   workflow_dispatch:
 
 jobs:
 
-  yaml-lint:
-    name: YAML Lint
+  syntax:
+    name: Ansible Syntax Check
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install yamllint
+      - name: Install Ansible + dependencies
         run: |
-          python3 -m pip install --upgrade pip
-          pip install yamllint
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
 
-      - name: Run yamllint
+      - name: Install required Ansible collections
         run: |
-          yamllint \
-            -d '{extends: default, rules: {truthy: disable}}' \
-            .
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
 
-  gitleaks:
-    name: Gitleaks Scan
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
+
+      - name: Syntax Check OS Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/os-bootstrap.yml \
+            --syntax-check
+
+
+  lint:
+    name: Ansible Lint
     runs-on: ubuntu-latest
-    needs: yaml-lint
-
-    permissions:
-      contents: read
-      pull-requests: read
+    needs: syntax
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-</file>
+      - name: Install Ansible + lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip ansible-lint
 
-<file path="ansible/roles/os-bootstrap/tasks/main.yml">
----
-# Main Task Loader
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
 
-- name: Users setup
-  ansible.builtin.import_tasks: users.yml
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
 
-- name: Package installation
-  ansible.builtin.import_tasks: packages.yml
+      - name: Run ansible-lint (entire repo)
+        run: |
+          ansible-lint ansible/
 
-- name: SSH configuration
-  ansible.builtin.import_tasks: ssh.yml
-
-- name: Firewall setup
-  ansible.builtin.import_tasks: firewall.yml
-
-- name: Fail2ban setup
-  ansible.builtin.import_tasks: fail2ban.yml
-
-- name: Sysctl configuration
-  ansible.builtin.import_tasks: sysctl.yml
+      - name: Syntax Check K3s Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-bootstrap.yml \
+            --syntax-check
 </file>
 
 </files>

@@ -3,21 +3,27 @@
 - name: Get installed K3s version
   ansible.builtin.command:
     cmd: k3s --version
-  register: installed_k3s_version
+  register: k3s_installed_version
   failed_when: false
   changed_when: false
 
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+
 - name: Install K3s
-  ansible.builtin.shell: |
-    curl -sfL https://get.k3s.io | \
-    INSTALL_K3S_VERSION={{ k3s_version }} \
-    INSTALL_K3S_EXEC="{{ k3s_install_args }}" \
-    sh -
+  ansible.builtin.command: >
+    /bin/bash /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
   args:
-    executable: /bin/bash
+    creates: /usr/local/bin/k3s
   when:
-    - installed_k3s_version.rc != 0 or
-      k3s_version not in installed_k3s_version.stdout
+    - k3s_installed_version.rc != 0 or
+      k3s_version not in k3s_installed_version.stdout
 
 - name: Enable K3s service
   ansible.builtin.systemd:
