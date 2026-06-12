@@ -1,0 +1,134 @@
+---
+
+#################################################
+# FIXED DATA DISK (/dev/sdb → /data)
+#################################################
+
+- name: Set data disk device (explicit OCI volume)
+  ansible.builtin.set_fact:
+    k3s_data_disk: /dev/sdb
+    k3s_data_label: platform-data
+
+- name: Validate data disk exists
+  ansible.builtin.stat:
+    path: "{{ k3s_data_disk }}"
+  register: disk_check
+
+- name: Fail if disk not found
+  ansible.builtin.fail:
+    msg: "Data disk {{ k3s_data_disk }} not found"
+  when: not disk_check.stat.exists
+
+
+#################################################
+# FORMAT DISK SAFELY
+#################################################
+
+- name: Check filesystem type
+  ansible.builtin.command:
+    cmd: blkid -o value -s TYPE {{ k3s_data_disk }}
+  register: fs_type
+  failed_when: false
+  changed_when: false
+
+
+- name: Check existing filesystem information
+  ansible.builtin.command:
+    cmd: blkid {{ k3s_data_disk }}
+  register: blkid_result
+  failed_when: false
+  changed_when: false
+
+
+#################################################
+# SAFETY CHECK BEFORE FORMAT
+#################################################
+
+- name: Check if disk is already mounted
+  ansible.builtin.command:
+    cmd: findmnt {{ k3s_data_disk }}
+  register: disk_mount_check
+  failed_when: false
+  changed_when: false
+
+
+- name: Fail if disk is already mounted
+  ansible.builtin.fail:
+    msg: >
+      {{ k3s_data_disk }} is already mounted.
+      Refusing to format to prevent data loss.
+  when:
+    - disk_mount_check.rc == 0
+
+
+#################################################
+# FORMAT ONLY IF REQUIRED
+#################################################
+
+- name: Format disk with ext4 + label
+  ansible.builtin.command:
+    cmd: mkfs.ext4 -F -L {{ k3s_data_label }} {{ k3s_data_disk }}
+  when:
+    - fs_type.stdout != "ext4"
+
+
+#################################################
+# GET UUID (SAFE MOUNT METHOD)
+#################################################
+
+- name: Get disk UUID
+  ansible.builtin.command:
+    cmd: blkid -s UUID -o value {{ k3s_data_disk }}
+  register: disk_uuid
+  changed_when: false
+
+
+- name: Set UUID fact
+  ansible.builtin.set_fact:
+    k3s_data_uuid: "{{ disk_uuid.stdout }}"
+
+
+#################################################
+# MOUNT /data
+#################################################
+
+- name: Create /data root directory
+  ansible.builtin.file:
+    path: /data
+    state: directory
+    mode: "0755"
+
+
+- name: Mount data disk using UUID
+  ansible.builtin.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: mounted
+
+
+- name: Persist mount in fstab
+  ansible.builtin.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: present
+
+
+#################################################
+# DIRECTORY STRUCTURE
+#################################################
+
+- name: Create required /data structure
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /data/applications, owner: ubuntu, mode: "0755" }
+    - { path: /data/platform, owner: root, mode: "0755" }
+    - { path: /data/platform/kubernetes, owner: root, mode: "0755" }
+    - { path: /data/platform/kubernetes/k3s, owner: root, mode: "0755" }

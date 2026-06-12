@@ -63,6 +63,8 @@ ansible/roles/k3s/tasks/install.yaml
 ansible/roles/k3s/tasks/kubeconfig.yaml
 ansible/roles/k3s/tasks/main.yaml
 ansible/roles/k3s/tasks/prereqs.yaml
+ansible/roles/k3s/tasks/storage.yaml
+ansible/roles/k3s/tasks/validate_disk.yaml
 ansible/roles/os-bootstrap/defaults/main.yml
 ansible/roles/os-bootstrap/handlers/main.yml
 ansible/roles/os-bootstrap/tasks/cleanup.yml
@@ -105,6 +107,161 @@ repo_structure.txt
 <files>
 This section contains the contents of the repository's files.
 
+<file path="ansible/roles/k3s/tasks/storage.yaml">
+---
+
+#################################################
+# FIXED DATA DISK (/dev/sdb → /data)
+#################################################
+
+- name: Set data disk device (explicit OCI volume)
+  ansible.builtin.set_fact:
+    k3s_data_disk: /dev/sdb
+    k3s_data_label: platform-data
+
+- name: Validate data disk exists
+  ansible.builtin.stat:
+    path: "{{ k3s_data_disk }}"
+  register: disk_check
+
+- name: Fail if disk not found
+  ansible.builtin.fail:
+    msg: "Data disk {{ k3s_data_disk }} not found"
+  when: not disk_check.stat.exists
+
+
+#################################################
+# FORMAT DISK SAFELY
+#################################################
+
+- name: Check filesystem type
+  ansible.builtin.command:
+    cmd: blkid -o value -s TYPE {{ k3s_data_disk }}
+  register: fs_type
+  failed_when: false
+  changed_when: false
+
+
+- name: Check existing filesystem information
+  ansible.builtin.command:
+    cmd: blkid {{ k3s_data_disk }}
+  register: blkid_result
+  failed_when: false
+  changed_when: false
+
+
+#################################################
+# SAFETY CHECK BEFORE FORMAT
+#################################################
+
+- name: Check if disk is already mounted
+  ansible.builtin.command:
+    cmd: findmnt {{ k3s_data_disk }}
+  register: disk_mount_check
+  failed_when: false
+  changed_when: false
+
+
+- name: Fail if disk is already mounted
+  ansible.builtin.fail:
+    msg: >
+      {{ k3s_data_disk }} is already mounted.
+      Refusing to format to prevent data loss.
+  when:
+    - disk_mount_check.rc == 0
+
+
+#################################################
+# FORMAT ONLY IF REQUIRED
+#################################################
+
+- name: Format disk with ext4 + label
+  ansible.builtin.command:
+    cmd: mkfs.ext4 -F -L {{ k3s_data_label }} {{ k3s_data_disk }}
+  when:
+    - fs_type.stdout != "ext4"
+
+
+#################################################
+# GET UUID (SAFE MOUNT METHOD)
+#################################################
+
+- name: Get disk UUID
+  ansible.builtin.command:
+    cmd: blkid -s UUID -o value {{ k3s_data_disk }}
+  register: disk_uuid
+  changed_when: false
+
+
+- name: Set UUID fact
+  ansible.builtin.set_fact:
+    k3s_data_uuid: "{{ disk_uuid.stdout }}"
+
+
+#################################################
+# MOUNT /data
+#################################################
+
+- name: Create /data root directory
+  ansible.builtin.file:
+    path: /data
+    state: directory
+    mode: "0755"
+
+
+- name: Mount data disk using UUID
+  ansible.builtin.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: mounted
+
+
+- name: Persist mount in fstab
+  ansible.builtin.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: present
+
+
+#################################################
+# DIRECTORY STRUCTURE
+#################################################
+
+- name: Create required /data structure
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /data/applications, owner: ubuntu, mode: "0755" }
+    - { path: /data/platform, owner: root, mode: "0755" }
+    - { path: /data/platform/kubernetes, owner: root, mode: "0755" }
+    - { path: /data/platform/kubernetes/k3s, owner: root, mode: "0755" }
+</file>
+
+<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
+---
+
+- name: Verify /data is mounted
+  ansible.builtin.command: mountpoint -q /data
+  register: mount_check
+  failed_when: mount_check.rc != 0
+
+- name: Show disk usage
+  ansible.builtin.command: df -h /data
+  register: df_output
+  changed_when: false
+
+- name: Debug disk usage
+  ansible.builtin.debug:
+    var: df_output.stdout_lines
+</file>
+
 <file path="ansible/inventories/dev/group_vars/all.yml">
 
 </file>
@@ -117,10 +274,12 @@ This section contains the contents of the repository's files.
 ---
 
 k3s_version: "v1.33.1+k3s1"
+k3s_data_dir: /data/platform/kubernetes/k3s
 
 k3s_install_args: >-
   --write-kubeconfig-mode 644
   --tls-san {{ ansible_host }}
+  --data-dir {{ k3s_data_dir }}
 
 k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
 </file>
@@ -135,6 +294,12 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
 
 <file path="ansible/roles/k3s/tasks/main.yaml">
 ---
+
+- name: Setup storage
+  import_tasks: storage.yaml
+
+- name: Validate storage
+  import_tasks: validate_disk.yaml
 
 - name: Install prerequisites
   ansible.builtin.import_tasks: prereqs.yaml
@@ -513,6 +678,15 @@ collections:
     name: k3s
     enabled: true
     state: started
+
+- name: Wait for K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    state: started
+  register: k3s_service
+  retries: 10
+  delay: 15
+  until: k3s_service.status.ActiveState == "active"
 
 - name: Wait for K3s node token
   ansible.builtin.wait_for:
@@ -937,102 +1111,6 @@ ansible_python_interpreter: /usr/bin/python3
     mode: "0600"
 </file>
 
-<file path="ansible/roles/k3s/tasks/prereqs.yaml">
----
-
-- name: Install K3s dependencies
-  ansible.builtin.apt:
-    name:
-      - curl
-      - wget
-      - ca-certificates
-      - apt-transport-https
-      - gnupg
-      - software-properties-common
-      - iptables
-      - iproute2
-      - ebtables
-      - ethtool
-    state: present
-    update_cache: true
-
-#################################################
-# KERNEL MODULES (CRITICAL FOR K3s)
-#################################################
-
-- name: Load required kernel modules
-  community.general.modprobe:
-    name: "{{item}}"
-    state: present
-  loop:
-    - br_netfilter
-    - overlay
-
-- name: Persist kernel modules for reboot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/k3s.conf
-    content: |
-      br_netfilter
-      overlay
-    mode: "0644"
-
-#################################################
-# SAFE SYSCTL FOR K3s
-#################################################
-
-- name: Enable IPv4 forwarding
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-
-- name: Check bridge sysctl availability
-  ansible.builtin.stat:
-    path: /proc/sys/net/bridge
-  register: k3s_bridge_sysctl
-  changed_when: false
-
-- name: Apply bridge netfilter sysctl (if supported)
-  ansible.posix.sysctl:
-    name: "{{item}}"
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-  loop:
-    - net.bridge.bridge-nf-call-iptables
-    - net.bridge.bridge-nf-call-ip6tables
-  when: k3s_bridge_sysctl.stat.exists
-
-#################################################
-# OPTIONAL WARNING
-#################################################
-
-- name: Warn if bridge sysctl is unavailable
-  ansible.builtin.debug:
-    msg: "Bridge sysctl not available; kernel module may not be fully ready"
-  when: not k3s_bridge_sysctl.stat.exists
-
-#################################################
-# SYSTEM NETWORKING TUNING
-#################################################
-
-- name: Ensure system networking config file exists
-  ansible.builtin.copy:
-    dest: /etc/sysctl.d/99-k3s.conf
-    mode: "0644"
-    content: |
-      net.ipv4.ip_forward = 1
-      net.bridge.bridge-nf-call-iptables = 1
-      net.bridge.bridge-nf-call-ip6tables = 1
-
-- name: Reload sysctl safely
-  ansible.builtin.command: sysctl --system
-  changed_when: false
-</file>
-
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
 ---
 </file>
@@ -1274,6 +1352,102 @@ jobs:
             -i inventory/hosts.ini \
             ansible/playbooks/site.yml \
             --private-key key.pem
+</file>
+
+<file path="ansible/roles/k3s/tasks/prereqs.yaml">
+---
+
+- name: Install K3s dependencies
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - ca-certificates
+      - apt-transport-https
+      - gnupg
+      - software-properties-common
+      - iptables
+      - iproute2
+      - ebtables
+      - ethtool
+    state: present
+    update_cache: true
+
+#################################################
+# KERNEL MODULES (CRITICAL FOR K3s)
+#################################################
+
+- name: Load required kernel modules
+  community.general.modprobe:
+    name: "{{item}}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+
+- name: Persist kernel modules for reboot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k3s.conf
+    content: |
+      br_netfilter
+      overlay
+    mode: "0644"
+
+#################################################
+# SAFE SYSCTL FOR K3s
+#################################################
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+
+- name: Check bridge sysctl availability
+  ansible.builtin.stat:
+    path: /proc/sys/net/bridge
+  register: k3s_bridge_sysctl
+  changed_when: false
+
+- name: Apply bridge netfilter sysctl (if supported)
+  ansible.posix.sysctl:
+    name: "{{item}}"
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+  loop:
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables
+  when: k3s_bridge_sysctl.stat.exists
+
+#################################################
+# OPTIONAL WARNING
+#################################################
+
+- name: Warn if bridge sysctl is unavailable
+  ansible.builtin.debug:
+    msg: "Bridge sysctl not available; kernel module may not be fully ready"
+  when: not k3s_bridge_sysctl.stat.exists
+
+#################################################
+# SYSTEM NETWORKING TUNING
+#################################################
+
+- name: Ensure system networking config file exists
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k3s.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+- name: Reload sysctl safely
+  ansible.builtin.command: sysctl --system
+  changed_when: false
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
