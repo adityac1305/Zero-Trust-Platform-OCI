@@ -2,14 +2,14 @@
 
 - name: Verify /data is mounted
   ansible.builtin.command: mountpoint -q /data
-  register: mount_check
-  failed_when: mount_check.rc != 0
+  register: k3s_mount_check
+  failed_when: k3s_mount_check.rc != 0
 
 - name: Show disk usage
   ansible.builtin.command: df -h /data
-  register: df_output
+  register: k3s_df_output
   changed_when: false
 
 - name: Debug disk usage
   ansible.builtin.debug:
-    var: df_output.stdout_lines
+    var: k3s_df_output.stdout_lines
