@@ -133,56 +133,6 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
     state: restarted
 </file>
 
-<file path="ansible/roles/k3s/tasks/install.yaml">
----
-
-- name: Get installed K3s version
-  ansible.builtin.command:
-    cmd: k3s --version
-  register: k3s_installed_version
-  failed_when: false
-  changed_when: false
-
-- name: Download K3s install script
-  ansible.builtin.get_url:
-    url: https://get.k3s.io
-    dest: /tmp/k3s-install.sh
-    mode: "0755"
-
-- name: Install K3s
-  ansible.builtin.command: >
-    /bin/bash /tmp/k3s-install.sh
-  environment:
-    INSTALL_K3S_VERSION: "{{ k3s_version }}"
-    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
-  args:
-    creates: /usr/local/bin/k3s
-  when:
-    - k3s_installed_version.rc != 0 or
-      k3s_version not in k3s_installed_version.stdout
-
-- name: Enable K3s service
-  ansible.builtin.systemd:
-    name: k3s
-    enabled: true
-    state: started
-
-- name: Wait for K3s node token
-  ansible.builtin.wait_for:
-    path: /var/lib/rancher/k3s/server/node-token
-    timeout: 300
-
-- name: Verify K3s
-  ansible.builtin.command:
-    cmd: k3s kubectl get nodes
-  register: k3s_nodes
-  changed_when: false
-
-- name: Display node status
-  ansible.builtin.debug:
-    var: k3s_nodes.stdout_lines
-</file>
-
 <file path="ansible/roles/k3s/tasks/main.yaml">
 ---
 
@@ -194,35 +144,6 @@ k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
 
 - name: Configure kubeconfig
   ansible.builtin.import_tasks: kubeconfig.yaml
-</file>
-
-<file path="ansible/roles/k3s/tasks/prereqs.yaml">
----
-- name: Install K3s dependencies
-  ansible.builtin.apt:
-    name:
-      - curl
-      - wget
-      - ca-certificates
-      - apt-transport-https
-      - gnupg
-      - software-properties-common
-    state: present
-    update_cache: true
-
-- name: Enable IPv4 forwarding
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
-    state: present
-    reload: true
-
-- name: Enable bridge nftables
-  ansible.posix.sysctl:
-    name: net.bridge.bridge-nf-call-iptables
-    value: "1"
-    state: present
-    reload: true
 </file>
 
 <file path="ansible/scripts/backup-configs.sh">
@@ -559,29 +480,141 @@ collections:
   - name: ansible.posix
 </file>
 
-<file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
+<file path="ansible/roles/k3s/tasks/install.yaml">
 ---
-- name: Ensure kube directory exists
-  ansible.builtin.file:
-    path: /home/ubuntu/.kube
-    state: directory
-    owner: ubuntu
-    group: ubuntu
+
+- name: Get installed K3s version
+  ansible.builtin.command:
+    cmd: k3s --version
+  register: k3s_installed_version
+  failed_when: false
+  changed_when: false
+
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
     mode: "0755"
 
-- name: Check kubeconfig exists
-  ansible.builtin.stat:
-    path: /home/ubuntu/.kube/config
-  register: k3s_kubeconfig_file
+- name: Install K3s
+  ansible.builtin.command: >
+    /bin/bash /tmp/k3s-install.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
+  args:
+    creates: /usr/local/bin/k3s
+  when:
+    - k3s_installed_version.rc != 0 or
+      k3s_version not in k3s_installed_version.stdout
 
-- name: Copy kubeconfig
+- name: Enable K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Wait for K3s node token
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+    timeout: 300
+
+- name: Verify K3s
+  ansible.builtin.command:
+    cmd: k3s kubectl get nodes
+  register: k3s_nodes
+  changed_when: false
+
+- name: Display node status
+  ansible.builtin.debug:
+    var: k3s_nodes.stdout_lines
+</file>
+
+<file path="ansible/roles/k3s/tasks/prereqs.yaml">
+---
+
+- name: Install K3s dependencies
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - ca-certificates
+      - apt-transport-https
+      - gnupg
+      - software-properties-common
+      - iptables
+      - iproute2
+      - ebtables
+      - ethtool
+    state: present
+    update_cache: true
+
+#################################################
+# KERNEL MODULES (CRITICAL FOR K3s)
+#################################################
+
+- name: Load required kernel modules
+  ansible.builtin.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+
+- name: Persist kernel modules for reboot
   ansible.builtin.copy:
-    src: "{{ k3s_kubeconfig_path }}"
-    dest: /home/ubuntu/.kube/config
-    remote_src: true
-    owner: ubuntu
-    group: ubuntu
-    mode: "0600"
+    dest: /etc/modules-load.d/k3s.conf
+    content: |
+      br_netfilter
+      overlay
+    mode: "0644"
+
+#################################################
+# SYSCTL SAFE APPLICATION (OCI SAFE)
+#################################################
+
+- name: Set safe sysctl parameters for K3s
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: true
+    ignoreerrors: true
+  loop:
+    - { name: "net.ipv4.ip_forward", value: "1" }
+    - { name: "net.bridge.bridge-nf-call-iptables", value: "1" }
+    - { name: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+
+#################################################
+# GUARANTEE BRIDGE MODULE IS ACTIVE BEFORE SYSCTL EDGE CASES
+#################################################
+
+- name: Ensure bridge sysctl path exists before enforcing strict rules
+  ansible.builtin.stat:
+    path: /proc/sys/net/bridge
+  register: bridge_sysctl
+
+- name: Warn if bridge sysctl is not available
+  ansible.builtin.debug:
+    msg: "Bridge sysctl not available yet - kernel module may not be fully initialized"
+  when: not bridge_sysctl.stat.exists
+
+#################################################
+# SYSTEM NETWORKING TUNING (K3s REQUIREMENT)
+#################################################
+
+- name: Ensure system networking config file exists
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k3s.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+- name: Reload sysctl safely
+  ansible.builtin.command: sysctl --system
+  changed_when: false
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -964,6 +997,31 @@ ansible_python_interpreter: /usr/bin/python3
   hosts: all
   gather_facts: false
   tasks: []
+</file>
+
+<file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
+---
+- name: Ensure kube directory exists
+  ansible.builtin.file:
+    path: /home/ubuntu/.kube
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0755"
+
+- name: Check kubeconfig exists
+  ansible.builtin.stat:
+    path: /home/ubuntu/.kube/config
+  register: k3s_kubeconfig_file
+
+- name: Copy kubeconfig
+  ansible.builtin.copy:
+    src: "{{ k3s_kubeconfig_path }}"
+    dest: /home/ubuntu/.kube/config
+    remote_src: true
+    owner: ubuntu
+    group: ubuntu
+    mode: "0600"
 </file>
 
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
@@ -1635,16 +1693,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
-<file path="ansible/playbooks/site.yml">
----
-
-- name: OS Bootstrap
-  import_playbook: os-bootstrap.yml
-
-- name: K3s Bootstrap
-  import_playbook: k3s-bootstrap.yml
-</file>
-
 <file path="ansible/roles/os-bootstrap/tasks/main.yml">
 ---
 # Main Task Loader
@@ -1901,6 +1949,16 @@ jobs:
             -i inventories/lab/hosts.ini \
             playbooks/k3s-bootstrap.yml \
             --syntax-check
+</file>
+
+<file path="ansible/playbooks/site.yml">
+---
+
+- name: OS Bootstrap
+  import_playbook: os-bootstrap.yml
+
+- name: K3s Bootstrap
+  import_playbook: k3s-bootstrap.yml
 </file>
 
 </files>
