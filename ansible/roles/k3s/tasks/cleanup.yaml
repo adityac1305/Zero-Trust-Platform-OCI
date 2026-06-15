@@ -1,0 +1,15 @@
+# ansible/roles/k3s/tasks/cleanup.yaml
+---
+- name: Install K3s image cleanup cron
+  ansible.builtin.cron:
+    name: "K3s image cleanup"
+    minute: "0"
+    hour: "3"
+    job: "/usr/bin/crictl rmi --prune >> /var/log/k3s-cleanup.log 2>&1; journalctl --vacuum-time=14d >> /var/log/k3s-cleanup.log 2>&1"
+
+- name: Install containerd cache cleanup cron
+  ansible.builtin.cron:
+    name: "Containerd cache cleanup"
+    minute: "30"
+    hour: "3"
+    job: "find /data/platform/kubernetes/k3s/agent/containerd -name '*.tmp' -mtime +1 -delete >> /var/log/k3s-cleanup.log 2>&1"

@@ -1,0 +1,11 @@
+---
+
+- name: K3s Config Rollout
+  hosts: k3s
+  become: true
+
+  vars:
+    k3s_config_only: true
+
+  roles:
+    - k3s

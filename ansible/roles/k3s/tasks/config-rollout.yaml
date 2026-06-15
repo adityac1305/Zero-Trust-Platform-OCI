@@ -1,0 +1,65 @@
+---
+
+- name: Ensure K3s config directory exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Capture existing K3s config checksum
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/config.yaml
+    checksum_algorithm: sha256
+  register: old_k3s_config
+
+- name: Render K3s configuration
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Capture new K3s config checksum
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/config.yaml
+    checksum_algorithm: sha256
+  register: new_k3s_config
+
+- name: Detect K3s config change
+  ansible.builtin.set_fact:
+    k3s_config_changed: >-
+      {{
+        old_k3s_config.stat.checksum | default('') !=
+        new_k3s_config.stat.checksum
+      }}
+
+- name: Restart K3s when config changed
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+    daemon_reload: true
+  when: k3s_config_changed
+
+- name: Wait for K3s to be ready after restart
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+  register: k3s_validation
+  changed_when: false
+  retries: 10
+  delay: 15
+  until: k3s_validation.rc == 0
+  when: k3s_config_changed
+
+- name: Validate K3s (no restart case)
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+  register: k3s_validation
+  changed_when: false
+  when: not k3s_config_changed
+
+- name: Display K3s validation
+  ansible.builtin.debug:
+    var: k3s_validation.stdout_lines

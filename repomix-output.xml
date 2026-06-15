@@ -52,19 +52,25 @@ ansible/inventories/dev/hosts.ini
 ansible/inventories/lab/group_vars/all.yml
 ansible/inventories/lab/hosts.ini
 ansible/playbooks/k3s-bootstrap.yml
+ansible/playbooks/k3s-config-rollout.yml
 ansible/playbooks/os-bootstrap.yml
 ansible/playbooks/os-rollback.yml
 ansible/playbooks/site.yml
 ansible/playbooks/vault.yml
 ansible/requirements.yml
+ansible/roles/k3s/defaults/config.yaml
 ansible/roles/k3s/defaults/main.yaml
 ansible/roles/k3s/handlers/main.yaml
+ansible/roles/k3s/tasks/cleanup.yaml
+ansible/roles/k3s/tasks/config-rollout.yaml
 ansible/roles/k3s/tasks/install.yaml
 ansible/roles/k3s/tasks/kubeconfig.yaml
+ansible/roles/k3s/tasks/logging.yaml
 ansible/roles/k3s/tasks/main.yaml
 ansible/roles/k3s/tasks/prereqs.yaml
 ansible/roles/k3s/tasks/storage.yaml
 ansible/roles/k3s/tasks/validate_disk.yaml
+ansible/roles/k3s/templates/config.yaml.j2
 ansible/roles/os-bootstrap/defaults/main.yml
 ansible/roles/os-bootstrap/handlers/main.yml
 ansible/roles/os-bootstrap/tasks/cleanup.yml
@@ -107,6 +113,164 @@ repo_structure.txt
 <files>
 This section contains the contents of the repository's files.
 
+<file path="ansible/playbooks/k3s-config-rollout.yml">
+---
+
+- name: K3s Config Rollout
+  hosts: k3s
+  become: true
+
+  vars:
+    k3s_config_only: true
+
+  roles:
+    - k3s
+</file>
+
+<file path="ansible/roles/k3s/defaults/config.yaml">
+---
+
+k3s_config:
+
+  data_dir: /data/platform/kubernetes/k3s
+
+  disable:
+    - traefik
+
+  kube_apiserver:
+    event_ttl: 1h
+
+  kubelet:
+    max_pods: 110
+    container_log_max_size: 10Mi
+    container_log_max_files: 5
+</file>
+
+<file path="ansible/roles/k3s/tasks/cleanup.yaml">
+# ansible/roles/k3s/tasks/cleanup.yaml
+---
+- name: Install K3s image cleanup cron
+  ansible.builtin.cron:
+    name: "K3s image cleanup"
+    minute: "0"
+    hour: "3"
+    job: "/usr/bin/crictl rmi --prune >> /var/log/k3s-cleanup.log 2>&1; journalctl --vacuum-time=14d >> /var/log/k3s-cleanup.log 2>&1"
+
+- name: Install containerd cache cleanup cron
+  ansible.builtin.cron:
+    name: "Containerd cache cleanup"
+    minute: "30"
+    hour: "3"
+    job: "find /data/platform/kubernetes/k3s/agent/containerd -name '*.tmp' -mtime +1 -delete >> /var/log/k3s-cleanup.log 2>&1"
+</file>
+
+<file path="ansible/roles/k3s/tasks/config-rollout.yaml">
+---
+
+- name: Ensure K3s config directory exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Capture existing K3s config checksum
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/config.yaml
+    checksum_algorithm: sha256
+  register: old_k3s_config
+
+- name: Render K3s configuration
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Capture new K3s config checksum
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/config.yaml
+    checksum_algorithm: sha256
+  register: new_k3s_config
+
+- name: Detect K3s config change
+  ansible.builtin.set_fact:
+    k3s_config_changed: >-
+      {{
+        old_k3s_config.stat.checksum | default('') !=
+        new_k3s_config.stat.checksum
+      }}
+
+- name: Restart K3s when config changed
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+    daemon_reload: true
+  when: k3s_config_changed
+
+- name: Wait for K3s to be ready after restart
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+  register: k3s_validation
+  changed_when: false
+  retries: 10
+  delay: 15
+  until: k3s_validation.rc == 0
+  when: k3s_config_changed
+
+- name: Validate K3s (no restart case)
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+  register: k3s_validation
+  changed_when: false
+  when: not k3s_config_changed
+
+- name: Display K3s validation
+  ansible.builtin.debug:
+    var: k3s_validation.stdout_lines
+</file>
+
+<file path="ansible/roles/k3s/tasks/logging.yaml">
+---
+
+- name: Configure journald retention
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/k3s.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Journal]
+      SystemMaxUse=2G
+      MaxRetentionSec=14day
+  notify:
+    - Restart journald
+</file>
+
+<file path="ansible/roles/k3s/templates/config.yaml.j2">
+write-kubeconfig-mode: "0644"
+
+tls-san:
+  - "{{ ansible_host }}"
+
+data-dir: "{{ k3s_config.data_dir }}"
+
+disable:
+{% for item in k3s_config.disable %}
+  - {{ item }}
+{% endfor %}
+
+kube-apiserver-arg:
+  - event-ttl={{ k3s_config.kube_apiserver.event_ttl }}
+
+kubelet-arg:
+  - max-pods={{ k3s_config.kubelet.max_pods }}
+  - container-log-max-size={{ k3s_config.kubelet.container_log_max_size }}
+  - container-log-max-files={{ k3s_config.kubelet.container_log_max_files }}
+</file>
+
 <file path="ansible/inventories/dev/group_vars/all.yml">
 
 </file>
@@ -117,9 +281,16 @@ This section contains the contents of the repository's files.
 
 <file path="ansible/roles/k3s/handlers/main.yaml">
 ---
-- name: Restart K3s
+- name: Restart K3s (safe)
   ansible.builtin.systemd:
     name: k3s
+    state: restarted
+    daemon_reload: true
+  listen: Restart K3s
+
+- name: Restart journald
+  ansible.builtin.systemd:
+    name: systemd-journald
     state: restarted
 </file>
 
@@ -458,154 +629,24 @@ collections:
 </file>
 
 <file path="ansible/roles/k3s/defaults/main.yaml">
+# ansible/roles/k3s/defaults/main.yaml
 ---
-
 k3s_version: "v1.33.1+k3s1"
 k3s_data_dir: /data/platform/kubernetes/k3s
-
-k3s_install_args: >-
-  --write-kubeconfig-mode 644
-  --tls-san {{ ansible_host }}
-  --data-dir {{ k3s_data_dir }}
-
 k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
-</file>
+k3s_install: true
+k3s_config_only: false
 
-<file path="ansible/roles/k3s/tasks/storage.yaml">
----
-
-#################################################
-# FIXED DATA DISK (/dev/sdb → /data)
-#################################################
-
-- name: Set data disk device (explicit OCI volume)
-  ansible.builtin.set_fact:
-    k3s_data_disk: /dev/sdb
-    k3s_data_label: platform-data
-
-- name: Validate data disk exists
-  ansible.builtin.stat:
-    path: "{{ k3s_data_disk }}"
-  register: k3s_disk_check
-
-- name: Fail if disk not found
-  ansible.builtin.fail:
-    msg: "Data disk {{ k3s_data_disk }} not found"
-  when: not k3s_disk_check.stat.exists
-
-
-#################################################
-# FORMAT DISK SAFELY
-#################################################
-
-- name: Check filesystem type
-  ansible.builtin.command:
-    cmd: blkid -o value -s TYPE {{ k3s_data_disk }}
-  register: k3s_fs_type
-  failed_when: false
-  changed_when: false
-
-
-- name: Check existing filesystem information
-  ansible.builtin.command:
-    cmd: blkid {{ k3s_data_disk }}
-  register: k3s_blkid_result
-  failed_when: false
-  changed_when: false
-
-
-#################################################
-# SAFETY CHECK BEFORE FORMAT
-#################################################
-
-- name: Check if disk is already mounted
-  ansible.builtin.command:
-    cmd: findmnt {{ k3s_data_disk }}
-  register: k3s_disk_mount_check
-  failed_when: false
-  changed_when: false
-
-
-- name: Skip formatting when disk is already mounted
-  ansible.builtin.debug:
-    msg: "{{ k3s_data_disk }} already mounted, skipping format"
-  when:
-    - k3s_disk_mount_check.rc == 0
-
-
-#################################################
-# FORMAT ONLY IF REQUIRED
-#################################################
-
-- name: Format disk with ext4 + label
-  ansible.builtin.command:
-    cmd: mkfs.ext4 -F -L {{ k3s_data_label }} {{ k3s_data_disk }}
-  changed_when: true
-  when:
-    - k3s_fs_type.stdout != "ext4"
-    - k3s_disk_mount_check.rc != 0
-
-
-#################################################
-# GET UUID (SAFE MOUNT METHOD)
-#################################################
-
-- name: Get disk UUID
-  ansible.builtin.command:
-    cmd: blkid -s UUID -o value {{ k3s_data_disk }}
-  register: k3s_disk_uuid
-  changed_when: false
-
-
-- name: Set UUID fact
-  ansible.builtin.set_fact:
-    k3s_data_uuid: "{{ k3s_disk_uuid.stdout }}"
-
-
-#################################################
-# MOUNT /data
-#################################################
-
-- name: Create /data root directory
-  ansible.builtin.file:
-    path: /data
-    state: directory
-    mode: "0755"
-
-
-- name: Mount data disk using UUID
-  ansible.posix.mount:
-    path: /data
-    src: "UUID={{ k3s_data_uuid }}"
-    fstype: ext4
-    opts: defaults,nofail,x-systemd.device-timeout=30
-    state: mounted
-
-
-- name: Persist mount in fstab
-  ansible.posix.mount:
-    path: /data
-    src: "UUID={{ k3s_data_uuid }}"
-    fstype: ext4
-    opts: defaults,nofail,x-systemd.device-timeout=30
-    state: present
-
-
-#################################################
-# DIRECTORY STRUCTURE
-#################################################
-
-- name: Create required /data structure
-  ansible.builtin.file:
-    path: "{{ item.path }}"
-    state: directory
-    owner: "{{ item.owner }}"
-    mode: "{{ item.mode }}"
-  loop:
-    - {path: /data/applications, owner: ubuntu, mode: "0755"}
-    - {path: /data/platform, owner: root, mode: "0755"}
-    - {path: /data/platform/kubernetes, owner: root, mode: "0755"}
-    - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
+k3s_config:
+  data_dir: /data/platform/kubernetes/k3s
+  disable:
+    - traefik
+  kube_apiserver:
+    event_ttl: 1h
+  kubelet:
+    max_pods: 110
+    container_log_max_size: 10Mi
+    container_log_max_files: 5
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -1016,43 +1057,233 @@ ansible_python_interpreter: /usr/bin/python3
 </file>
 
 <file path="ansible/roles/k3s/tasks/main.yaml">
+# ansible/roles/k3s/tasks/main.yaml
 ---
+- name: Ensure storage is ready
+  ansible.builtin.include_tasks: storage.yaml
+  when: not k3s_config_only
 
-- name: Setup storage
-  ansible.builtin.import_tasks: storage.yaml
-
-- name: Validate storage
-  ansible.builtin.import_tasks: validate_disk.yaml
+- name: Validate disk
+  import_tasks: validate_disk.yaml
 
 - name: Install prerequisites
-  ansible.builtin.import_tasks: prereqs.yaml
+  ansible.builtin.include_tasks: prereqs.yaml
+  when: not k3s_config_only
 
-- name: Install K3s
-  ansible.builtin.import_tasks: install.yaml
+- name: Install or upgrade K3s
+  ansible.builtin.include_tasks: install.yaml
+  when: not k3s_config_only
 
-- name: Configure kubeconfig
-  ansible.builtin.import_tasks: kubeconfig.yaml
+- name: Apply or update K3s configuration
+  import_tasks: config-rollout.yaml
+
+- name: Configure logging
+  import_tasks: logging.yaml
+
+- name: Configure cleanup jobs
+  import_tasks: cleanup.yaml
+
+- name: Setup kubeconfig
+  import_tasks: kubeconfig.yaml
+</file>
+
+<file path="ansible/roles/k3s/tasks/storage.yaml">
+---
+
+#################################################
+# FIXED DATA DISK (/dev/sdb → /data)
+#################################################
+
+- name: Set data disk device (explicit OCI volume)
+  ansible.builtin.set_fact:
+    k3s_data_disk: /dev/sdb
+    k3s_data_label: platform-data
+
+- name: Validate data disk exists
+  ansible.builtin.stat:
+    path: "{{ k3s_data_disk }}"
+  register: k3s_disk_check
+
+- name: Fail if disk not found
+  ansible.builtin.fail:
+    msg: "Data disk {{ k3s_data_disk }} not found"
+  when: not k3s_disk_check.stat.exists
+
+
+#################################################
+# FORMAT DISK SAFELY
+#################################################
+
+- name: Check filesystem type
+  ansible.builtin.command:
+    cmd: blkid -o value -s TYPE {{ k3s_data_disk }}
+  register: k3s_fs_type
+  failed_when: false
+  changed_when: false
+
+
+- name: Check existing filesystem information
+  ansible.builtin.command:
+    cmd: blkid {{ k3s_data_disk }}
+  register: k3s_blkid_result
+  failed_when: false
+  changed_when: false
+
+
+#################################################
+# SAFETY CHECK BEFORE FORMAT
+#################################################
+
+- name: Check if disk is already mounted
+  ansible.builtin.command:
+    cmd: findmnt {{ k3s_data_disk }}
+  register: k3s_disk_mount_check
+  failed_when: false
+  changed_when: false
+
+
+- name: Skip formatting when disk is already mounted
+  ansible.builtin.debug:
+    msg: "{{ k3s_data_disk }} already mounted, skipping format"
+  when:
+    - k3s_disk_mount_check.rc == 0
+
+
+#################################################
+# FORMAT ONLY IF REQUIRED
+#################################################
+
+- name: Format disk with ext4 + label
+  ansible.builtin.command:
+    cmd: mkfs.ext4 -F -L {{ k3s_data_label }} {{ k3s_data_disk }}
+  changed_when: true
+  when:
+    - k3s_fs_type.stdout != "ext4"
+    - k3s_disk_mount_check.rc != 0
+
+
+#################################################
+# GET UUID (SAFE MOUNT METHOD)
+#################################################
+
+- name: Get disk UUID
+  ansible.builtin.command:
+    cmd: blkid -s UUID -o value {{ k3s_data_disk }}
+  register: k3s_disk_uuid
+  changed_when: false
+
+
+- name: Set UUID fact
+  ansible.builtin.set_fact:
+    k3s_data_uuid: "{{ k3s_disk_uuid.stdout }}"
+
+
+#################################################
+# MOUNT /data
+#################################################
+
+- name: Create /data root directory
+  ansible.builtin.file:
+    path: /data
+    state: directory
+    mode: "0755"
+
+
+- name: Mount data disk using UUID
+  ansible.posix.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: mounted
+
+
+- name: Persist mount in fstab
+  ansible.posix.mount:
+    path: /data
+    src: "UUID={{ k3s_data_uuid }}"
+    fstype: ext4
+    opts: defaults,nofail,x-systemd.device-timeout=30
+    state: present
+
+
+#################################################
+# DIRECTORY STRUCTURE
+#################################################
+
+- name: Create required /data structure
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /data/applications, owner: ubuntu, mode: "0755"}
+    - {path: /data/platform, owner: root, mode: "0755"}
+    - {path: /data/platform/kubernetes, owner: root, mode: "0755"}
+    - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
 <file path="ansible/roles/k3s/tasks/validate_disk.yaml">
 ---
-
-- name: Verify /data is mounted
+- name: Verify /data mount exists
   ansible.builtin.command:
     cmd: mountpoint -q /data
-  register: k3s_mount_check
-  failed_when: k3s_mount_check.rc != 0
+  register: mount_check
+  changed_when: false
+  failed_when: mount_check.rc != 0
+
+- name: Get /data usage percent
+  ansible.builtin.shell:
+    cmd: df /data | awk 'NR==2 {print $5}' | sed 's/%//'
+    executable: /bin/bash
+  register: disk_usage
   changed_when: false
 
 - name: Show disk usage
+  ansible.builtin.debug:
+    msg: "/data usage {{ disk_usage.stdout }}%"
+
+- name: Warning threshold 70%
+  ansible.builtin.debug:
+    msg: "WARNING: /data usage above 70%"
+  when: disk_usage.stdout | int > 70
+
+- name: Cleanup unused container images when disk exceeds 85%
   ansible.builtin.command:
-    cmd: df -h /data
-  register: k3s_df_output
+    cmd: crictl rmi --prune
+  when:
+    - disk_usage.stdout | int > 85
+
+- name: Reduce journald size when disk exceeds 85%
+  ansible.builtin.command:
+    cmd: journalctl --vacuum-size=500M
+  when:
+    - disk_usage.stdout | int > 85
+
+- name: Fail if disk critically full
+  ansible.builtin.fail:
+    msg: "/data critically full (>95%)"
+  when: disk_usage.stdout | int > 95
+
+- name: Check inode usage
+  ansible.builtin.shell:
+    cmd: df -i /data | awk 'NR==2 {print $5}' | sed 's/%//'
+    executable: /bin/bash
+  register: inode_usage
   changed_when: false
 
-- name: Debug disk usage
+- name: Fail if inode usage critical
+  ansible.builtin.fail:
+    msg: "Inodes critically full (>90%)"
+  when: inode_usage.stdout | int > 90
+  
+- name: Report disk protection status
   ansible.builtin.debug:
-    var: k3s_df_output.stdout_lines
+    msg:
+      - "/data usage: {{ disk_usage.stdout }}%"
+      - "inode usage: {{ inode_usage.stdout }}%"
+      - "cleanup policy active above 85%"
 </file>
 
 <file path="ansible/roles/os-bootstrap/defaults/main.yml">
@@ -1077,9 +1308,7 @@ ansible_python_interpreter: /usr/bin/python3
 
 <file path=".github/workflows/infrastructure-deploy.yaml">
 ---
-
 name: Infrastructure Deploy (CD)
-
 on:
   push:
     branches:
@@ -1087,215 +1316,250 @@ on:
     paths:
       - "opentofu/**"
       - "ansible/**"
-
   workflow_dispatch:
-
 jobs:
-
-  ############################################################
-  # 1. OPEN TOFU PLAN
-  ############################################################
-  plan:
-    if: github.event_name == 'push'
-    name: OpenTofu Plan
+############################################################
+# 0. CHANGE DETECTION
+############################################################
+  changes:
+    name: Detect Change Type
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-
+    outputs:
+      tofu: ${{ steps.filter.outputs.tofu }}
+      k3s_config: ${{ steps.filter.outputs.k3s_config }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Setup OpenTofu
-        uses: opentofu/setup-opentofu@v1
-
+        with:
+          fetch-depth: 2
+      - name: Detect changed files
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tofu=true" >> $GITHUB_OUTPUT
+            echo "k3s_config=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only HEAD^ HEAD)
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -q "^opentofu/"; then
+            echo "tofu=true" >> $GITHUB_OUTPUT
+          else
+            echo "tofu=false" >> $GITHUB_OUTPUT
+          fi
+          K3S_CHANGED=false
+          if echo "$CHANGED" | grep -Eq "^ansible/(roles/k3s/|playbooks/k3s-config-rollout\.yml|roles/k3s/templates/|roles/k3s/defaults/)"; then
+            K3S_CHANGED=true
+          fi
+          echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
+############################################################
+# 1. OPEN TOFU PLAN
+############################################################
+  plan:
+    if: needs.changes.outputs.tofu == 'true'
+    name: OpenTofu Plan
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
       - name: Create OCI API Key File
         run: |
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
           chmod 600 oci_api_key.pem
-
-      - name: Initialize OpenTofu
+      - name: Init
         run: |
           tofu init -input=false -reconfigure
-
-      - name: Generate Plan
+      - name: Plan
         run: |
           tofu plan \
-            -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
-            -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
-            -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
-            -var="region=${{ secrets.OCI_REGION }}" \
-            -var="compartment_ocid=${{ secrets.OCI_COMPARTMENT_OCID }}" \
-            -var="private_key_path=oci_api_key.pem" \
-            -var="ssh_public_key=${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
-            -out=tfplan
-
-      - name: Upload Terraform Plan
+          -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
+          -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
+          -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
+          -var="region=${{ secrets.OCI_REGION }}" \
+          -var="compartment_ocid=${{ secrets.OCI_COMPARTMENT_OCID }}" \
+          -var="private_key_path=oci_api_key.pem" \
+          -var="ssh_public_key=${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
+          -out=tfplan
+      - name: Upload Plan
         uses: actions/upload-artifact@v4
         with:
           name: tofu-plan
           path: opentofu/environments/lab/tfplan
-
-  ############################################################
-  # 2. APPLY
-  ############################################################
+############################################################
+# 2. OPEN TOFU APPLY
+############################################################
   apply:
-    if: github.event_name == 'push'
+    if: needs.changes.outputs.tofu == 'true'
     name: OpenTofu Apply
     runs-on: ubuntu-latest
-    needs: plan
-
+    needs:
+      - changes
+      - plan
     environment:
       name: lab
-
     defaults:
       run:
         working-directory: opentofu/environments/lab
-
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup OpenTofu
-        uses: opentofu/setup-opentofu@v1
-
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
       - name: Create OCI API Key File
         run: |
           echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
           chmod 600 oci_api_key.pem
-
-      - name: Initialize OpenTofu
+      - name: Init
         run: |
           tofu init -input=false -reconfigure
-
-      - name: Download Terraform Plan
+      - name: Download Plan
         uses: actions/download-artifact@v4
         with:
           name: tofu-plan
           path: opentofu/environments/lab
-
-      - name: Apply Infrastructure
-        run: tofu apply -auto-approve tfplan
-
-  ############################################################
-  # 3. GENERATE INVENTORY
-  ############################################################
+      - name: Apply
+        run: |
+          tofu apply -auto-approve tfplan
+############################################################
+# 3. GENERATE INVENTORY
+############################################################
   inventory:
-    if: github.event_name == 'push'
+    if: |
+      always() &&
+      needs.changes.result == 'success' &&
+      (
+        needs.changes.outputs.tofu == 'true' ||
+        needs.changes.outputs.k3s_config == 'true'
+      ) &&
+      (
+        needs.apply.result == 'success' ||
+        needs.apply.result == 'skipped'
+      )
     name: Generate Inventory
     runs-on: ubuntu-latest
-    needs: apply
-
+    needs:
+      - changes
+      - apply
+    outputs:
+      vm_ip: ${{ steps.extract.outputs.vm_ip }}
+      tofu: ${{ needs.changes.outputs.tofu }}
+      k3s_config: ${{ needs.changes.outputs.k3s_config }}
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-
-    outputs:
-      vm_ip: ${{ steps.extract.outputs.vm_ip }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup OpenTofu
-        uses: opentofu/setup-opentofu@v1
-
-      - name: Initialize OpenTofu
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Init
         working-directory: opentofu/environments/lab
         run: |
           tofu init -input=false -reconfigure
-
-      - name: Extract VM IP
+      - name: Extract IP
         id: extract
         working-directory: opentofu/environments/lab
         run: |
-          PUBLIC_IP=$(tofu output -raw public_ip)
-          echo "vm_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-
-      - name: Create Inventory
+          IP=$(tofu output -raw public_ip)
+          echo "vm_ip=$IP" >> $GITHUB_OUTPUT
+      - name: Create inventory
         run: |
           mkdir -p inventory
           echo "[k3s]" > inventory/hosts.ini
-          echo \
-          "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
+          echo "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
           >> inventory/hosts.ini
-
       - name: Upload Inventory
         uses: actions/upload-artifact@v4
         with:
           name: ansible-inventory
           path: inventory/hosts.ini
-
-  ############################################################
-  # 4. ANSIBLE
-  ############################################################
+############################################################
+# 4. FULL ANSIBLE BOOTSTRAP
+############################################################
   ansible:
-    if: github.event_name == 'push'
-    name: Run Ansible Bootstrap
+    if: |
+      always() &&
+      needs.inventory.result == 'success' &&
+      needs.inventory.outputs.tofu == 'true'
+    name: Run Full Ansible Bootstrap
     runs-on: ubuntu-latest
-    needs: inventory
-
+    needs:
+      - inventory
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download Inventory
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
           name: ansible-inventory
           path: inventory
-
       - name: Install Ansible
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible python3-pip
           pip3 install --upgrade pip
-
+      - name: Collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+      - name: SSH key
+        run: |
+          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+      - name: Run site playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
+          ansible-playbook \
+          -i inventory/hosts.ini \
+          ansible/playbooks/site.yml \
+          --private-key key.pem
+############################################################
+# 5. K3S CONFIG ONLY ROLLOUT
+############################################################
+  config-rollout:
+    if: |
+      always() &&
+      needs.inventory.result == 'success' &&
+      needs.inventory.outputs.k3s_config == 'true'
+    name: K3s Config Rollout
+    runs-on: ubuntu-latest
+    needs:
+      - inventory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
       - name: Install Collections
         run: |
           ansible-galaxy collection install community.general
           ansible-galaxy collection install ansible.posix
-
-      - name: Create SSH Key
+      - name: SSH Key
         run: |
           echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
           chmod 600 key.pem
-
-      - name: Wait for SSH
-        run: |
-          HOST=$(awk '/^[0-9]/{print $1}' inventory/hosts.ini)
-
-          for i in {1..30}; do
-            if ssh -o StrictHostKeyChecking=no \
-                 -i key.pem \
-                 ubuntu@$HOST exit 0; then
-              exit 0
-            fi
-
-            sleep 10
-          done
-
-          exit 1
-
-      - name: Run Ansible Playbook
+      - name: Run K3s Config Rollout
         env:
-          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_HOST_KEY_CHECKING: False
         run: |
           ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
           ansible-playbook \
-            -i inventory/hosts.ini \
-            ansible/playbooks/site.yml \
-            --private-key key.pem
+          -i inventory/hosts.ini \
+          ansible/playbooks/k3s-config-rollout.yml \
+          --private-key key.pem
 </file>
 
 <file path="ansible/roles/k3s/tasks/install.yaml">
@@ -1308,23 +1572,24 @@ jobs:
   failed_when: false
   changed_when: false
 
-- name: Download K3s install script
+- name: Download K3s installer
   ansible.builtin.get_url:
     url: https://get.k3s.io
     dest: /tmp/k3s-install.sh
     mode: "0755"
 
-- name: Install K3s
-  ansible.builtin.command: >
-    /bin/bash /tmp/k3s-install.sh
+- name: Install or upgrade K3s
+  ansible.builtin.command:
+    cmd: /bin/bash /tmp/k3s-install.sh
   environment:
     INSTALL_K3S_VERSION: "{{ k3s_version }}"
-    INSTALL_K3S_EXEC: "{{ k3s_install_args }}"
-  args:
-    creates: /usr/local/bin/k3s
+    INSTALL_K3S_EXEC: "server --cluster-init --config /etc/rancher/k3s/config.yaml"
   when:
+    - not k3s_config_only
     - k3s_installed_version.rc != 0 or
       k3s_version not in k3s_installed_version.stdout
+  notify:
+    - Restart K3s
 
 - name: Enable K3s service
   ansible.builtin.systemd:
@@ -1346,7 +1611,7 @@ jobs:
     path: "{{ k3s_data_dir }}/server/node-token"
     timeout: 300
 
-- name: Verify K3s
+- name: Verify K3s node
   ansible.builtin.command:
     cmd: kubectl --kubeconfig {{ k3s_kubeconfig_path }} get nodes
   register: k3s_nodes
@@ -1500,6 +1765,16 @@ repos:
 - name: Reload sysctl safely
   ansible.builtin.command: sysctl --system
   changed_when: false
+
+#################################################
+# Install crictl
+#################################################
+
+- name: Install container tools
+  ansible.builtin.apt:
+    name:
+      - cri-tools
+    state: present
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
@@ -1983,6 +2258,14 @@ jobs:
           ansible-playbook \
             -i inventories/lab/hosts.ini \
             playbooks/k3s-bootstrap.yml \
+            --syntax-check
+
+      - name: Syntax Check K3s Config Rollout
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-config-rollout.yml \
             --syntax-check
 </file>
 

@@ -79,3 +79,11 @@ jobs:
             -i inventories/lab/hosts.ini \
             playbooks/k3s-bootstrap.yml \
             --syntax-check
+
+      - name: Syntax Check K3s Config Rollout
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-config-rollout.yml \
+            --syntax-check
