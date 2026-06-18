@@ -18,7 +18,9 @@
     cmd: /bin/bash /tmp/k3s-install.sh
   environment:
     INSTALL_K3S_VERSION: "{{ k3s_version }}"
-    INSTALL_K3S_EXEC: "server --cluster-init --config /etc/rancher/k3s/config.yaml"
+    INSTALL_K3S_EXEC: >-
+      server --cluster-init
+      --config /etc/rancher/k3s/config.yaml
   when:
     - not k3s_config_only
     - k3s_installed_version.rc != 0 or

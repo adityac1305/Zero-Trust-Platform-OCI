@@ -9,9 +9,9 @@ on:
       - "ansible/**"
   workflow_dispatch:
 jobs:
-############################################################
-# 0. CHANGE DETECTION
-############################################################
+  ############################################################
+  # 0. CHANGE DETECTION
+  ############################################################
   changes:
     name: Detect Change Type
     runs-on: ubuntu-latest
@@ -200,11 +200,14 @@ jobs:
         with:
           name: ansible-inventory
           path: inventory
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ansible
       - name: Install Ansible
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
+          python3 -m pip install --upgrade pip
+          pip3 install ansible ansible-lint
       - name: Collections
         run: |
           ansible-galaxy collection install community.general
@@ -240,11 +243,14 @@ jobs:
         with:
           name: ansible-inventory
           path: inventory
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ansible
       - name: Install Ansible
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
+          python3 -m pip install --upgrade pip
+          pip3 install ansible
       - name: Install Collections
         run: |
           ansible-galaxy collection install community.general
