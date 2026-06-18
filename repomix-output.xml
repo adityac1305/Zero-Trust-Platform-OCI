@@ -99,30 +99,6 @@ repo_structure.txt
 <files>
 This section contains the contents of the repository's files.
 
-<file path="ansible/roles/k3s/tasks/logging.yaml">
----
-- name: Ensure journald config directory exists
-  ansible.builtin.file:
-    path: /etc/systemd/journald.conf.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Configure journald retention
-  ansible.builtin.copy:
-    dest: /etc/systemd/journald.conf.d/k3s.conf
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      [Journal]
-      SystemMaxUse=2G
-      MaxRetentionSec=14day
-  notify:
-    - Restart journald
-</file>
-
 <file path="ansible/roles/k3s/templates/config.yaml.j2">
 write-kubeconfig-mode: "0644"
 
@@ -510,72 +486,28 @@ collections:
       -name '*.tmp' -mtime +1 -delete >> /var/log/k3s-cleanup.log 2>&1
 </file>
 
-<file path="ansible/roles/k3s/tasks/config-rollout.yaml">
+<file path="ansible/roles/k3s/tasks/logging.yaml">
 ---
-
-- name: Ensure K3s config directory exists
+- name: Ensure journald config directory exists
   ansible.builtin.file:
-    path: /etc/rancher/k3s
+    path: /etc/systemd/journald.conf.d
     state: directory
     owner: root
     group: root
     mode: "0755"
 
-- name: Capture existing K3s config checksum
-  ansible.builtin.stat:
-    path: /etc/rancher/k3s/config.yaml
-    checksum_algorithm: sha256
-  register: k3s_old_config
-
-- name: Render K3s configuration
-  ansible.builtin.template:
-    src: config.yaml.j2
-    dest: /etc/rancher/k3s/config.yaml
+- name: Configure journald retention
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/k3s.conf
     owner: root
     group: root
     mode: "0644"
-
-- name: Capture new K3s config checksum
-  ansible.builtin.stat:
-    path: /etc/rancher/k3s/config.yaml
-    checksum_algorithm: sha256
-  register: k3s_new_config
-
-- name: Detect K3s config change
-  ansible.builtin.set_fact:
-    k3s_config_changed: >-
-      {{
-        k3s_old_config.stat.checksum | default('') !=
-        k3s_new_config.stat.checksum
-      }}
-
-- name: Restart K3s when config changed
-  ansible.builtin.systemd:
-    name: k3s
-    state: restarted
-    daemon_reload: true
-  when: k3s_config_changed
-
-- name: Wait for K3s to be ready after restart
-  ansible.builtin.command:
-    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
-  register: k3s_validation
-  changed_when: false
-  retries: 10
-  delay: 15
-  until: k3s_validation.rc == 0
-  when: k3s_config_changed
-
-- name: Validate K3s (no restart case)
-  ansible.builtin.command:
-    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
-  register: k3s_validation
-  changed_when: false
-  when: not k3s_config_changed
-
-- name: Display K3s validation
-  ansible.builtin.debug:
-    msg: "{{ k3s_validation.stdout_lines | default(k3s_validation.results | map(attribute='stdout_lines') | last | default([])) }}"
+    content: |
+      [Journal]
+      SystemMaxUse=2G
+      MaxRetentionSec=14day
+  notify:
+    - Restart journald
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -1135,6 +1067,91 @@ k3s_config:
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
+<file path="ansible/roles/k3s/tasks/config-rollout.yaml">
+---
+
+- name: Ensure K3s config directory exists
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Capture existing K3s config checksum
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/config.yaml
+    checksum_algorithm: sha256
+  register: k3s_old_config
+
+- name: Render K3s configuration
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Capture new K3s config checksum
+  ansible.builtin.stat:
+    path: /etc/rancher/k3s/config.yaml
+    checksum_algorithm: sha256
+  register: k3s_new_config
+
+- name: Detect K3s config change
+  ansible.builtin.set_fact:
+    k3s_config_changed: >-
+      {{
+        k3s_old_config.stat.checksum | default('') !=
+        k3s_new_config.stat.checksum
+      }}
+
+- name: Delete all kube-system pods before restart
+  ansible.builtin.command:
+    cmd: >-
+      kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+      delete pods --all -n kube-system --ignore-not-found
+  changed_when: true
+  when: k3s_config_changed
+
+- name: Restart K3s when config changed
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+    daemon_reload: true
+  when: k3s_config_changed
+
+- name: Wait for K3s to be ready after restart
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+  register: k3s_validation
+  changed_when: false
+  retries: 10
+  delay: 15
+  until: k3s_validation.rc == 0
+  when: k3s_config_changed
+
+- name: Validate K3s (no restart case)
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
+  register: k3s_validation
+  changed_when: false
+  when: not k3s_config_changed
+
+- name: Display K3s validation
+  ansible.builtin.debug:
+    msg: >-
+      {{
+        k3s_validation.stdout_lines
+        | default(
+            k3s_validation.results
+            | map(attribute='stdout_lines')
+            | last
+            | default([])
+          )
+      }}
+</file>
+
 <file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
 ---
 
@@ -1592,102 +1609,6 @@ jobs:
   ansible.builtin.import_tasks: kubeconfig.yaml
 </file>
 
-<file path="ansible/roles/k3s/tasks/prereqs.yaml">
----
-
-- name: Install K3s dependencies
-  ansible.builtin.apt:
-    name:
-      - curl
-      - wget
-      - ca-certificates
-      - apt-transport-https
-      - gnupg
-      - software-properties-common
-      - iptables
-      - iproute2
-      - ebtables
-      - ethtool
-    state: present
-    update_cache: true
-
-#################################################
-# KERNEL MODULES (CRITICAL FOR K3s)
-#################################################
-
-- name: Load required kernel modules
-  community.general.modprobe:
-    name: "{{ item }}"
-    state: present
-  loop:
-    - br_netfilter
-    - overlay
-
-- name: Persist kernel modules for reboot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/k3s.conf
-    content: |
-      br_netfilter
-      overlay
-    mode: "0644"
-
-#################################################
-# SAFE SYSCTL FOR K3s
-#################################################
-
-- name: Enable IPv4 forwarding
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-
-- name: Check bridge sysctl availability
-  ansible.builtin.stat:
-    path: /proc/sys/net/bridge
-  register: k3s_bridge_sysctl
-  changed_when: false
-
-- name: Apply bridge netfilter sysctl (if supported)
-  ansible.posix.sysctl:
-    name: "{{ item }}"
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-  loop:
-    - net.bridge.bridge-nf-call-iptables
-    - net.bridge.bridge-nf-call-ip6tables
-  when: k3s_bridge_sysctl.stat.exists
-
-#################################################
-# OPTIONAL WARNING
-#################################################
-
-- name: Warn if bridge sysctl is unavailable
-  ansible.builtin.debug:
-    msg: "Bridge sysctl not available; kernel module may not be fully ready"
-  when: not k3s_bridge_sysctl.stat.exists
-
-#################################################
-# SYSTEM NETWORKING TUNING
-#################################################
-
-- name: Ensure system networking config file exists
-  ansible.builtin.copy:
-    dest: /etc/sysctl.d/99-k3s.conf
-    mode: "0644"
-    content: |
-      net.ipv4.ip_forward = 1
-      net.bridge.bridge-nf-call-iptables = 1
-      net.bridge.bridge-nf-call-ip6tables = 1
-
-- name: Reload sysctl safely
-  ansible.builtin.command: sysctl --system
-  changed_when: false
-</file>
-
 <file path="ansible/roles/k3s/tasks/validate_disk.yaml">
 ---
 - name: Verify /data mount exists
@@ -1823,6 +1744,102 @@ jobs:
 - name: Display node status
   ansible.builtin.debug:
     var: k3s_nodes.stdout_lines
+</file>
+
+<file path="ansible/roles/k3s/tasks/prereqs.yaml">
+---
+
+- name: Install K3s dependencies
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - ca-certificates
+      - apt-transport-https
+      - gnupg
+      - software-properties-common
+      - iptables
+      - iproute2
+      - ebtables
+      - ethtool
+    state: present
+    update_cache: true
+
+#################################################
+# KERNEL MODULES (CRITICAL FOR K3s)
+#################################################
+
+- name: Load required kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+
+- name: Persist kernel modules for reboot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k3s.conf
+    content: |
+      br_netfilter
+      overlay
+    mode: "0644"
+
+#################################################
+# SAFE SYSCTL FOR K3s
+#################################################
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+
+- name: Check bridge sysctl availability
+  ansible.builtin.stat:
+    path: /proc/sys/net/bridge
+  register: k3s_bridge_sysctl
+  changed_when: false
+
+- name: Apply bridge netfilter sysctl (if supported)
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+  loop:
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables
+  when: k3s_bridge_sysctl.stat.exists
+
+#################################################
+# OPTIONAL WARNING
+#################################################
+
+- name: Warn if bridge sysctl is unavailable
+  ansible.builtin.debug:
+    msg: "Bridge sysctl not available; kernel module may not be fully ready"
+  when: not k3s_bridge_sysctl.stat.exists
+
+#################################################
+# SYSTEM NETWORKING TUNING
+#################################################
+
+- name: Ensure system networking config file exists
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k3s.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+- name: Reload sysctl safely
+  ansible.builtin.command: sysctl --system
+  changed_when: false
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/main.yml">
