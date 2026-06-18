@@ -50,9 +50,9 @@ jobs:
             K3S_VERSION_CHANGED=true
           fi
           echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT
-############################################################
-# 1. OPEN TOFU PLAN
-############################################################
+  ############################################################
+  # 1. OPEN TOFU PLAN
+  ############################################################
   plan:
     if: needs.changes.outputs.tofu == 'true'
     name: OpenTofu Plan
@@ -76,24 +76,23 @@ jobs:
         run: |
           tofu init -input=false -reconfigure
       - name: Plan
-        run: |
-          tofu plan \
-          -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
-          -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
-          -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
-          -var="region=${{ secrets.OCI_REGION }}" \
-          -var="compartment_ocid=${{ secrets.OCI_COMPARTMENT_OCID }}" \
-          -var="private_key_path=oci_api_key.pem" \
-          -var="ssh_public_key=${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
-          -out=tfplan
+        env:
+          TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+          TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+          TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          TF_VAR_region: ${{ secrets.OCI_REGION }}
+          TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          TF_VAR_private_key_path: oci_api_key.pem
+          TF_VAR_ssh_public_key: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
+        run: tofu plan -out=tfplan
       - name: Upload Plan
         uses: actions/upload-artifact@v4
         with:
           name: tofu-plan
           path: opentofu/environments/lab/tfplan
-############################################################
-# 2. OPEN TOFU APPLY
-############################################################
+  ############################################################
+  # 2. OPEN TOFU APPLY
+  ############################################################
   apply:
     if: needs.changes.outputs.tofu == 'true'
     name: OpenTofu Apply
@@ -127,9 +126,9 @@ jobs:
       - name: Apply
         run: |
           tofu apply -auto-approve tfplan
-############################################################
-# 3. GENERATE INVENTORY
-############################################################
+  ############################################################
+  # 3. GENERATE INVENTORY
+  ############################################################
   inventory:
     if: |
       always() &&
@@ -172,16 +171,16 @@ jobs:
         run: |
           mkdir -p inventory
           echo "[k3s]" > inventory/hosts.ini
-          echo "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
-          >> inventory/hosts.ini
+          VM_IP="${{ steps.extract.outputs.vm_ip }}"
+          echo "$VM_IP ansible_user=ubuntu" >> inventory/hosts.ini
       - name: Upload Inventory
         uses: actions/upload-artifact@v4
         with:
           name: ansible-inventory
           path: inventory/hosts.ini
-############################################################
-# 4. FULL ANSIBLE BOOTSTRAP
-############################################################
+  ############################################################
+  # 4. FULL ANSIBLE BOOTSTRAP
+  ############################################################
   ansible:
     if: |
       always() &&
@@ -225,9 +224,9 @@ jobs:
           -i inventory/hosts.ini \
           ansible/playbooks/site.yml \
           --private-key key.pem
-############################################################
-# 5. K3S CONFIG ONLY ROLLOUT
-############################################################
+  ############################################################
+  # 5. K3S CONFIG ONLY ROLLOUT
+  ############################################################
   config-rollout:
     if: |
       always() &&

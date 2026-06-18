@@ -50,7 +50,7 @@
   ansible.builtin.fail:
     msg: "Inodes critically full (>90%)"
   when: inode_usage.stdout | int > 90
-  
+
 - name: Report disk protection status
   ansible.builtin.debug:
     msg:
