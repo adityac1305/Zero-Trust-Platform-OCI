@@ -1245,273 +1245,6 @@ k3s_config:
     update_cache: true
 </file>
 
-<file path=".github/workflows/infrastructure-deploy.yaml">
----
-name: Infrastructure Deploy (CD)
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "opentofu/**"
-      - "ansible/**"
-  workflow_dispatch:
-jobs:
-############################################################
-# 0. CHANGE DETECTION
-############################################################
-  changes:
-    name: Detect Change Type
-    runs-on: ubuntu-latest
-    outputs:
-      tofu: ${{ steps.filter.outputs.tofu }}
-      k3s_config: ${{ steps.filter.outputs.k3s_config }}
-      k3s_version: ${{ steps.filter.outputs.k3s_version }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-      - name: Detect changed files
-        id: filter
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tofu=true" >> $GITHUB_OUTPUT
-            echo "k3s_config=true" >> $GITHUB_OUTPUT
-            echo "k3s_version=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          CHANGED=$(git diff --name-only HEAD^ HEAD)
-          echo "$CHANGED"
-          if echo "$CHANGED" | grep -q "^opentofu/"; then
-            echo "tofu=true" >> $GITHUB_OUTPUT
-          else
-            echo "tofu=false" >> $GITHUB_OUTPUT
-          fi
-          K3S_CHANGED=false
-          if echo "$CHANGED" | grep -Eq "^ansible/(roles/k3s/|playbooks/k3s-config-rollout\.yml|roles/k3s/templates/|roles/k3s/defaults/)"; then
-            K3S_CHANGED=true
-          fi
-          echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
-          K3S_VERSION_CHANGED=false
-          if echo "$CHANGED" | grep -q "^ansible/roles/k3s/defaults/main.yaml"; then
-            K3S_VERSION_CHANGED=true
-          fi
-          echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT
-############################################################
-# 1. OPEN TOFU PLAN
-############################################################
-  plan:
-    if: needs.changes.outputs.tofu == 'true'
-    name: OpenTofu Plan
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: opentofu/setup-opentofu@v1
-      - name: Create OCI API Key File
-        run: |
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
-          chmod 600 oci_api_key.pem
-      - name: Init
-        run: |
-          tofu init -input=false -reconfigure
-      - name: Plan
-        run: |
-          tofu plan \
-          -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
-          -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
-          -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
-          -var="region=${{ secrets.OCI_REGION }}" \
-          -var="compartment_ocid=${{ secrets.OCI_COMPARTMENT_OCID }}" \
-          -var="private_key_path=oci_api_key.pem" \
-          -var="ssh_public_key=${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
-          -out=tfplan
-      - name: Upload Plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: tofu-plan
-          path: opentofu/environments/lab/tfplan
-############################################################
-# 2. OPEN TOFU APPLY
-############################################################
-  apply:
-    if: needs.changes.outputs.tofu == 'true'
-    name: OpenTofu Apply
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - plan
-    environment:
-      name: lab
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: opentofu/setup-opentofu@v1
-      - name: Create OCI API Key File
-        run: |
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
-          chmod 600 oci_api_key.pem
-      - name: Init
-        run: |
-          tofu init -input=false -reconfigure
-      - name: Download Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: tofu-plan
-          path: opentofu/environments/lab
-      - name: Apply
-        run: |
-          tofu apply -auto-approve tfplan
-############################################################
-# 3. GENERATE INVENTORY
-############################################################
-  inventory:
-    if: |
-      always() &&
-      needs.changes.result == 'success' &&
-      (
-        needs.changes.outputs.tofu == 'true' ||
-        needs.changes.outputs.k3s_config == 'true'
-      ) &&
-      (
-        needs.apply.result == 'success' ||
-        needs.apply.result == 'skipped'
-      )
-    name: Generate Inventory
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - apply
-    outputs:
-      vm_ip: ${{ steps.extract.outputs.vm_ip }}
-      tofu: ${{ needs.changes.outputs.tofu }}
-      k3s_config: ${{ needs.changes.outputs.k3s_config }}
-      k3s_version: ${{ needs.changes.outputs.k3s_version }}
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: opentofu/setup-opentofu@v1
-      - name: Init
-        working-directory: opentofu/environments/lab
-        run: |
-          tofu init -input=false -reconfigure
-      - name: Extract IP
-        id: extract
-        working-directory: opentofu/environments/lab
-        run: |
-          IP=$(tofu output -raw public_ip)
-          echo "vm_ip=$IP" >> $GITHUB_OUTPUT
-      - name: Create inventory
-        run: |
-          mkdir -p inventory
-          echo "[k3s]" > inventory/hosts.ini
-          echo "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
-          >> inventory/hosts.ini
-      - name: Upload Inventory
-        uses: actions/upload-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory/hosts.ini
-############################################################
-# 4. FULL ANSIBLE BOOTSTRAP
-############################################################
-  ansible:
-    if: |
-      always() &&
-      needs.inventory.result == 'success' &&
-      (
-        needs.inventory.outputs.tofu == 'true' ||
-        needs.inventory.outputs.k3s_version == 'true'
-      )
-    name: Run Full Ansible Bootstrap
-    runs-on: ubuntu-latest
-    needs:
-      - inventory
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory
-      - name: Install Ansible
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
-      - name: Collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-      - name: SSH key
-        run: |
-          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
-          chmod 600 key.pem
-      - name: Run site playbook
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: False
-        run: |
-          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
-          ansible-playbook \
-          -i inventory/hosts.ini \
-          ansible/playbooks/site.yml \
-          --private-key key.pem
-############################################################
-# 5. K3S CONFIG ONLY ROLLOUT
-############################################################
-  config-rollout:
-    if: |
-      always() &&
-      needs.inventory.result == 'success' &&
-      needs.inventory.outputs.k3s_config == 'true'
-    name: K3s Config Rollout
-    runs-on: ubuntu-latest
-    needs:
-      - inventory
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory
-      - name: Install Ansible
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
-      - name: Install Collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-      - name: SSH Key
-        run: |
-          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
-          chmod 600 key.pem
-      - name: Run K3s Config Rollout
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: False
-        run: |
-          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
-          ansible-playbook \
-          -i inventory/hosts.ini \
-          ansible/playbooks/k3s-config-rollout.yml \
-          --private-key key.pem
-</file>
-
 <file path=".pre-commit-config.yaml">
 ---
 
@@ -1922,6 +1655,273 @@ resource "oci_core_public_ip" "reserved_ip" {
 }
 </file>
 
+<file path=".github/workflows/infrastructure-deploy.yaml">
+---
+name: Infrastructure Deploy (CD)
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "opentofu/**"
+      - "ansible/**"
+  workflow_dispatch:
+jobs:
+############################################################
+# 0. CHANGE DETECTION
+############################################################
+  changes:
+    name: Detect Change Type
+    runs-on: ubuntu-latest
+    outputs:
+      tofu: ${{ steps.filter.outputs.tofu }}
+      k3s_config: ${{ steps.filter.outputs.k3s_config }}
+      k3s_version: ${{ steps.filter.outputs.k3s_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Detect changed files
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tofu=true" >> $GITHUB_OUTPUT
+            echo "k3s_config=true" >> $GITHUB_OUTPUT
+            echo "k3s_version=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only HEAD^ HEAD)
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -q "^opentofu/"; then
+            echo "tofu=true" >> $GITHUB_OUTPUT
+          else
+            echo "tofu=false" >> $GITHUB_OUTPUT
+          fi
+          K3S_CHANGED=false
+          if echo "$CHANGED" | grep -Eq "^ansible/(roles/k3s/|playbooks/k3s-config-rollout\.yml|roles/k3s/templates/|roles/k3s/defaults/)"; then
+            K3S_CHANGED=true
+          fi
+          echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
+          K3S_VERSION_CHANGED=false
+          if echo "$CHANGED" | grep -q "^ansible/roles/k3s/defaults/main.yaml"; then
+            K3S_VERSION_CHANGED=true
+          fi
+          echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT
+############################################################
+# 1. OPEN TOFU PLAN
+############################################################
+  plan:
+    if: needs.changes.outputs.tofu == 'true'
+    name: OpenTofu Plan
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Create OCI API Key File
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+      - name: Init
+        run: |
+          tofu init -input=false -reconfigure
+      - name: Plan
+        run: |
+          tofu plan \
+          -var="tenancy_ocid=${{ secrets.OCI_TENANCY_OCID }}" \
+          -var="user_ocid=${{ secrets.OCI_USER_OCID }}" \
+          -var="fingerprint=${{ secrets.OCI_FINGERPRINT }}" \
+          -var="region=${{ secrets.OCI_REGION }}" \
+          -var="compartment_ocid=${{ secrets.OCI_COMPARTMENT_OCID }}" \
+          -var="private_key_path=oci_api_key.pem" \
+          -var="ssh_public_key=${{ secrets.OCI_SSH_PUBLIC_KEY }}" \
+          -out=tfplan
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab/tfplan
+############################################################
+# 2. OPEN TOFU APPLY
+############################################################
+  apply:
+    if: needs.changes.outputs.tofu == 'true'
+    name: OpenTofu Apply
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - plan
+    environment:
+      name: lab
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Create OCI API Key File
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+      - name: Init
+        run: |
+          tofu init -input=false -reconfigure
+      - name: Download Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab
+      - name: Apply
+        run: |
+          tofu apply -auto-approve tfplan
+############################################################
+# 3. GENERATE INVENTORY
+############################################################
+  inventory:
+    if: |
+      always() &&
+      needs.changes.result == 'success' &&
+      (
+        needs.changes.outputs.tofu == 'true' ||
+        needs.changes.outputs.k3s_config == 'true'
+      ) &&
+      (
+        needs.apply.result == 'success' ||
+        needs.apply.result == 'skipped'
+      )
+    name: Generate Inventory
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - apply
+    outputs:
+      vm_ip: ${{ steps.extract.outputs.vm_ip }}
+      tofu: ${{ needs.changes.outputs.tofu }}
+      k3s_config: ${{ needs.changes.outputs.k3s_config }}
+      k3s_version: ${{ needs.changes.outputs.k3s_version }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Init
+        working-directory: opentofu/environments/lab
+        run: |
+          tofu init -input=false -reconfigure
+      - name: Extract IP
+        id: extract
+        working-directory: opentofu/environments/lab
+        run: |
+          IP=$(tofu output -raw public_ip)
+          echo "vm_ip=$IP" >> $GITHUB_OUTPUT
+      - name: Create inventory
+        run: |
+          mkdir -p inventory
+          echo "[k3s]" > inventory/hosts.ini
+          echo "${{ steps.extract.outputs.vm_ip }} ansible_user=ubuntu" \
+          >> inventory/hosts.ini
+      - name: Upload Inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory/hosts.ini
+############################################################
+# 4. FULL ANSIBLE BOOTSTRAP
+############################################################
+  ansible:
+    if: |
+      always() &&
+      needs.inventory.result == 'success' &&
+      (
+        needs.inventory.outputs.tofu == 'true' ||
+        needs.inventory.outputs.k3s_version == 'true'
+      )
+    name: Run Full Ansible Bootstrap
+    runs-on: ubuntu-latest
+    needs:
+      - inventory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
+      - name: Collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+      - name: SSH key
+        run: |
+          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+      - name: Run site playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
+          ansible-playbook \
+          -i inventory/hosts.ini \
+          ansible/playbooks/site.yml \
+          --private-key key.pem
+############################################################
+# 5. K3S CONFIG ONLY ROLLOUT
+############################################################
+  config-rollout:
+    if: |
+      always() &&
+      needs.inventory.result == 'success' &&
+      needs.inventory.outputs.k3s_config == 'true'
+    name: K3s Config Rollout
+    runs-on: ubuntu-latest
+    needs:
+      - inventory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory
+      - name: Install Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
+      - name: Install Collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+      - name: SSH Key
+        run: |
+          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+      - name: Run K3s Config Rollout
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
+          ansible-playbook \
+          -i inventory/hosts.ini \
+          ansible/playbooks/k3s-config-rollout.yml \
+          --private-key key.pem
+</file>
+
 <file path=".github/workflows/security-ci.yaml">
 ---
 name: Security CI
@@ -2109,159 +2109,6 @@ jobs:
   import_playbook: k3s-bootstrap.yml
 </file>
 
-<file path="repo_structure.txt">
-Folder PATH listing for volume Data
-Volume serial number is 0000009C C87A:83A4
-D:.
-|   .gitignore
-|   .pre-commit-config.yaml
-|   repomix-output.xml
-|   repo_structure.txt
-|   
-+---.github
-|   \---workflows
-|           ansible-ci.yaml
-|           infrastructure-deploy.yaml
-|           opentofu-ci.yaml
-|           security-ci.yaml
-|           
-+---ansible
-|   |   ansible.cfg
-|   |   requirements.yml
-|   |   
-|   +---inventories
-|   |   +---dev
-|   |   |   |   hosts.ini
-|   |   |   |   
-|   |   |   \---group_vars
-|   |   |           all.yml
-|   |   |           
-|   |   \---lab
-|   |       |   hosts.ini
-|   |       |   
-|   |       \---group_vars
-|   |               all.yml
-|   |               
-|   +---playbooks
-|   |       k3s-bootstrap.yml
-|   |       os-bootstrap.yml
-|   |       os-rollback.yml
-|   |       site.yml
-|   |       vault.yml
-|   |       
-|   +---roles
-|   |   +---k3s
-|   |   |   +---defaults
-|   |   |   |       main.yaml
-|   |   |   |       
-|   |   |   +---handlers
-|   |   |   |       main.yaml
-|   |   |   |       
-|   |   |   +---tasks
-|   |   |   |       install.yaml
-|   |   |   |       kubeconfig.yaml
-|   |   |   |       main.yaml
-|   |   |   |       prereqs.yaml
-|   |   |   |       storage.yaml
-|   |   |   |       validate_disk.yaml
-|   |   |   |       
-|   |   |   \---templates
-|   |   \---os-bootstrap
-|   |       +---defaults
-|   |       |       main.yml
-|   |       |       
-|   |       +---files
-|   |       +---handlers
-|   |       |       main.yml
-|   |       |       
-|   |       +---tasks
-|   |       |       cleanup.yml
-|   |       |       fail2ban.yml
-|   |       |       firewall.yml
-|   |       |       main.yml
-|   |       |       packages.yml
-|   |       |       ssh.yml
-|   |       |       sysctl.yml
-|   |       |       users.yml
-|   |       |       
-|   |       +---templates
-|   |       \---vars
-|   |               main.yml
-|   |               
-|   +---scripts
-|   |       backup-configs.sh
-|   |       bootstrap-kubeconfig.sh
-|   |       generate-inventory.sh
-|   |       restore-configs.sh
-|   |       wait-for-ssh.sh
-|   |       
-|   +---templates
-|   \---vars
-+---helm
-\---opentofu
-    +---bootstrap
-    |   \---state-backend
-    |       |   .terraform.lock.hcl
-    |       |   bootstrap.tfplan
-    |       |   bootstrap.tfvars
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   terraform.tfstate
-    |       |   terraform.tfstate.backup
-    |       |   variables.tf
-    |       |   
-    |       +---.terraform
-    |       |   \---providers
-    |       |       \---registry.opentofu.org
-    |       |           \---oracle
-    |       |               \---oci
-    |       |                   \---8.17.0
-    |       |                       |   windows_amd64.lock
-    |       |                       |   
-    |       |                       \---windows_amd64
-    |       |                               terraform-provider-oci_v8.17.0
-    |       |                               
-    |       \---scripts
-    |               apply.sh
-    |               destroy.sh
-    |               init.sh
-    |               plan.sh
-    |               
-    +---environments
-    |   +---dev
-    |   \---lab
-    |       |   .terraform.lock.hcl
-    |       |   backend.tf
-    |       |   lab.tfplan
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   providers.tf
-    |       |   terraform.tfvars
-    |       |   variables.tf
-    |       |   versions.tf
-    |       |   
-    |       \---.terraform
-    |           |   terraform.tfstate
-    |           |   
-    |           \---providers
-    |               \---registry.opentofu.org
-    |                   \---oracle
-    |                       \---oci
-    |                           \---8.15.0
-    |                               |   windows_amd64.lock
-    |                               |   
-    |                               \---windows_amd64
-    |                                       terraform-provider-oci_v8.15.0
-    |                                       
-    +---modules
-    \---scripts
-            apply.sh
-            destroy.sh
-            init.sh
-            plan.sh
-            retry-apply.sh
-</file>
-
 <file path=".github/workflows/ansible-ci.yaml">
 ---
 
@@ -2352,6 +2199,137 @@ jobs:
             -i inventories/lab/hosts.ini \
             playbooks/k3s-config-rollout.yml \
             --syntax-check
+</file>
+
+<file path="repo_structure.txt">
+Folder PATH listing for volume Data
+Volume serial number is 0000008D C87A:83A4
+D:.
+|   .gitignore
+|   .pre-commit-config.yaml
+|   repomix-output.xml
+|   repo_structure.txt
+|   
++---.github
+|   \---workflows
+|           ansible-ci.yaml
+|           infrastructure-deploy.yaml
+|           opentofu-ci.yaml
+|           security-ci.yaml
+|           
++---ansible
+|   |   ansible.cfg
+|   |   requirements.yml
+|   |   
+|   +---inventories
+|   |   +---dev
+|   |   \---lab
+|   |       |   hosts.ini
+|   |       |   
+|   |       \---group_vars
+|   |               all.yml
+|   |               
+|   +---playbooks
+|   |       k3s-bootstrap.yml
+|   |       k3s-config-rollout.yml
+|   |       os-bootstrap.yml
+|   |       os-rollback.yml
+|   |       site.yml
+|   |       
+|   \---roles
+|       +---k3s
+|       |   +---defaults
+|       |   |       main.yaml
+|       |   |       
+|       |   +---handlers
+|       |   |       main.yaml
+|       |   |       
+|       |   +---tasks
+|       |   |       cleanup.yaml
+|       |   |       config-rollout.yaml
+|       |   |       install.yaml
+|       |   |       kubeconfig.yaml
+|       |   |       logging.yaml
+|       |   |       main.yaml
+|       |   |       prereqs.yaml
+|       |   |       storage.yaml
+|       |   |       validate_disk.yaml
+|       |   |       
+|       |   \---templates
+|       |           config.yaml.j2
+|       |           
+|       \---os-bootstrap
+|           \---tasks
+|                   fail2ban.yml
+|                   firewall.yml
+|                   main.yml
+|                   packages.yml
+|                   ssh.yml
+|                   sysctl.yml
+|                   
++---helm
+\---opentofu
+    +---bootstrap
+    |   \---state-backend
+    |       |   .terraform.lock.hcl
+    |       |   bootstrap.tfplan
+    |       |   bootstrap.tfvars
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   terraform.tfstate
+    |       |   terraform.tfstate.backup
+    |       |   variables.tf
+    |       |   
+    |       +---.terraform
+    |       |   \---providers
+    |       |       \---registry.opentofu.org
+    |       |           \---oracle
+    |       |               \---oci
+    |       |                   \---8.17.0
+    |       |                       |   windows_amd64.lock
+    |       |                       |   
+    |       |                       \---windows_amd64
+    |       |                               terraform-provider-oci_v8.17.0
+    |       |                               
+    |       \---scripts
+    |               apply.sh
+    |               destroy.sh
+    |               init.sh
+    |               plan.sh
+    |               
+    +---environments
+    |   +---dev
+    |   \---lab
+    |       |   .terraform.lock.hcl
+    |       |   backend.tf
+    |       |   lab.tfplan
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   providers.tf
+    |       |   terraform.tfvars
+    |       |   variables.tf
+    |       |   versions.tf
+    |       |   
+    |       \---.terraform
+    |           |   terraform.tfstate
+    |           |   
+    |           \---providers
+    |               \---registry.opentofu.org
+    |                   \---oracle
+    |                       \---oci
+    |                           \---8.15.0
+    |                               |   windows_amd64.lock
+    |                               |   
+    |                               \---windows_amd64
+    |                                       terraform-provider-oci_v8.15.0
+    |                                       
+    +---modules
+    \---scripts
+            apply.sh
+            destroy.sh
+            init.sh
+            plan.sh
+            retry-apply.sh
 </file>
 
 </files>
