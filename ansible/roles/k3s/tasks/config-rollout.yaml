@@ -36,6 +36,14 @@
         k3s_new_config.stat.checksum
       }}
 
+- name: Delete all kube-system pods before restart
+  ansible.builtin.command:
+    cmd: >-
+      kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+      delete pods --all -n kube-system --ignore-not-found
+  changed_when: true
+  when: k3s_config_changed
+
 - name: Restart K3s when config changed
   ansible.builtin.systemd:
     name: k3s
