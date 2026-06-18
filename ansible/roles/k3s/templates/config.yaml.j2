@@ -1,0 +1,19 @@
+write-kubeconfig-mode: "0644"
+
+tls-san:
+  - "{{ ansible_host }}"
+
+data-dir: "{{ k3s_config.data_dir }}"
+
+disable:
+{% for item in k3s_config.disable %}
+  - {{ item }}
+{% endfor %}
+
+kube-apiserver-arg:
+  - event-ttl={{ k3s_config.kube_apiserver.event_ttl }}
+
+kubelet-arg:
+  - max-pods={{ k3s_config.kubelet.max_pods }}
+  - container-log-max-size={{ k3s_config.kubelet.container_log_max_size }}
+  - container-log-max-files={{ k3s_config.kubelet.container_log_max_files }}

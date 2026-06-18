@@ -1,16 +1,28 @@
+# ansible/roles/k3s/tasks/main.yaml
 ---
+- name: Ensure storage is ready
+  ansible.builtin.include_tasks: storage.yaml
+  when: not k3s_config_only
 
-- name: Setup storage
-  ansible.builtin.import_tasks: storage.yaml
-
-- name: Validate storage
+- name: Validate disk
   ansible.builtin.import_tasks: validate_disk.yaml
 
 - name: Install prerequisites
-  ansible.builtin.import_tasks: prereqs.yaml
+  ansible.builtin.include_tasks: prereqs.yaml
+  when: not k3s_config_only
 
-- name: Install K3s
-  ansible.builtin.import_tasks: install.yaml
+- name: Install or upgrade K3s
+  ansible.builtin.include_tasks: install.yaml
+  when: not k3s_config_only
 
-- name: Configure kubeconfig
+- name: Apply or update K3s configuration
+  ansible.builtin.import_tasks: config-rollout.yaml
+
+- name: Configure logging
+  ansible.builtin.import_tasks: logging.yaml
+
+- name: Configure cleanup jobs
+  ansible.builtin.import_tasks: cleanup.yaml
+
+- name: Setup kubeconfig
   ansible.builtin.import_tasks: kubeconfig.yaml

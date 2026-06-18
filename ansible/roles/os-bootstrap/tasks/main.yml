@@ -1,9 +1,6 @@
 ---
 # Main Task Loader
 
-- name: Users setup
-  ansible.builtin.import_tasks: users.yml
-
 - name: Package installation
   ansible.builtin.import_tasks: packages.yml
 

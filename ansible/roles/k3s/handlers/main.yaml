@@ -1,5 +1,12 @@
 ---
-- name: Restart K3s
+- name: Restart K3s (safe)
   ansible.builtin.systemd:
     name: k3s
+    state: restarted
+    daemon_reload: true
+  listen: Restart K3s
+
+- name: Restart journald
+  ansible.builtin.systemd:
+    name: systemd-journald
     state: restarted
