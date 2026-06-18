@@ -5,7 +5,7 @@
   when: not k3s_config_only
 
 - name: Validate disk
-  import_tasks: validate_disk.yaml
+  ansible.builtin.import_tasks: validate_disk.yaml
 
 - name: Install prerequisites
   ansible.builtin.include_tasks: prereqs.yaml
@@ -16,13 +16,13 @@
   when: not k3s_config_only
 
 - name: Apply or update K3s configuration
-  import_tasks: config-rollout.yaml
+  ansible.builtin.import_tasks: config-rollout.yaml
 
 - name: Configure logging
-  import_tasks: logging.yaml
+  ansible.builtin.import_tasks: logging.yaml
 
 - name: Configure cleanup jobs
-  import_tasks: cleanup.yaml
+  ansible.builtin.import_tasks: cleanup.yaml
 
 - name: Setup kubeconfig
-  import_tasks: kubeconfig.yaml
+  ansible.builtin.import_tasks: kubeconfig.yaml

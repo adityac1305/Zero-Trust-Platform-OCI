@@ -41,12 +41,15 @@ jobs:
             echo "tofu=false" >> $GITHUB_OUTPUT
           fi
           K3S_CHANGED=false
-          if echo "$CHANGED" | grep -Eq "^ansible/(roles/k3s/|playbooks/k3s-config-rollout\.yml|roles/k3s/templates/|roles/k3s/defaults/)"; then
+          K3S_PATTERN="^ansible/(roles/k3s/|playbooks/k3s-config-rollout"
+          K3S_PATTERN="${K3S_PATTERN}\.yml|roles/k3s/templates/|roles/k3s/defaults/)"
+          if echo "$CHANGED" | grep -Eq "$K3S_PATTERN"; then
             K3S_CHANGED=true
           fi
           echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
           K3S_VERSION_CHANGED=false
-          if echo "$CHANGED" | grep -q "^ansible/roles/k3s/defaults/main.yaml"; then
+          K3S_VER_PATH="^ansible/roles/k3s/defaults/main.yaml"
+          if echo "$CHANGED" | grep -q "$K3S_VER_PATH"; then
             K3S_VERSION_CHANGED=true
           fi
           echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT

@@ -2,58 +2,60 @@
 - name: Verify /data mount exists
   ansible.builtin.command:
     cmd: mountpoint -q /data
-  register: mount_check
+  register: k3s_mount_check
   changed_when: false
-  failed_when: mount_check.rc != 0
+  failed_when: k3s_mount_check.rc != 0
 
 - name: Get /data usage percent
   ansible.builtin.shell:
-    cmd: df /data | awk 'NR==2 {print $5}' | sed 's/%//'
+    cmd: set -o pipefail && df /data | awk 'NR==2 {print $5}' | sed 's/%//'
     executable: /bin/bash
-  register: disk_usage
+  register: k3s_disk_usage
   changed_when: false
 
 - name: Show disk usage
   ansible.builtin.debug:
-    msg: "/data usage {{ disk_usage.stdout }}%"
+    msg: "/data usage {{ k3s_disk_usage.stdout }}%"
 
 - name: Warning threshold 70%
   ansible.builtin.debug:
     msg: "WARNING: /data usage above 70%"
-  when: disk_usage.stdout | int > 70
+  when: k3s_disk_usage.stdout | int > 70
 
 - name: Cleanup unused container images when disk exceeds 85%
   ansible.builtin.command:
     cmd: crictl rmi --prune
+  changed_when: true
   when:
-    - disk_usage.stdout | int > 85
+    - k3s_disk_usage.stdout | int > 85
 
 - name: Reduce journald size when disk exceeds 85%
   ansible.builtin.command:
     cmd: journalctl --vacuum-size=500M
+  changed_when: true
   when:
-    - disk_usage.stdout | int > 85
+    - k3s_disk_usage.stdout | int > 85
 
 - name: Fail if disk critically full
   ansible.builtin.fail:
     msg: "/data critically full (>95%)"
-  when: disk_usage.stdout | int > 95
+  when: k3s_disk_usage.stdout | int > 95
 
 - name: Check inode usage
   ansible.builtin.shell:
-    cmd: df -i /data | awk 'NR==2 {print $5}' | sed 's/%//'
+    cmd: set -o pipefail && df -i /data | awk 'NR==2 {print $5}' | sed 's/%//'
     executable: /bin/bash
-  register: inode_usage
+  register: k3s_inode_usage
   changed_when: false
 
 - name: Fail if inode usage critical
   ansible.builtin.fail:
     msg: "Inodes critically full (>90%)"
-  when: inode_usage.stdout | int > 90
+  when: k3s_inode_usage.stdout | int > 90
 
 - name: Report disk protection status
   ansible.builtin.debug:
     msg:
-      - "/data usage: {{ disk_usage.stdout }}%"
-      - "inode usage: {{ inode_usage.stdout }}%"
+      - "/data usage: {{ k3s_disk_usage.stdout }}%"
+      - "inode usage: {{ k3s_inode_usage.stdout }}%"
       - "cleanup policy active above 85%"

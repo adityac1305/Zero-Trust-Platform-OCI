@@ -16,6 +16,7 @@
 - name: Install or upgrade K3s
   ansible.builtin.command:
     cmd: /bin/bash /tmp/k3s-install.sh
+  changed_when: true
   environment:
     INSTALL_K3S_VERSION: "{{ k3s_version }}"
     INSTALL_K3S_EXEC: >-
