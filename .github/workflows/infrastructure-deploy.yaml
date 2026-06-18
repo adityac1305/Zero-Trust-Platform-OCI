@@ -234,11 +234,13 @@ jobs:
     if: |
       always() &&
       needs.inventory.result == 'success' &&
-      needs.inventory.outputs.k3s_config == 'true'
+      needs.inventory.outputs.k3s_config == 'true' &&
+      (needs.ansible.result == 'success' || needs.ansible.result == 'skipped')
     name: K3s Config Rollout
     runs-on: ubuntu-latest
     needs:
       - inventory
+      - ansible
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4

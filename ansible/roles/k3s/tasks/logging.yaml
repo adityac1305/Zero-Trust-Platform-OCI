@@ -1,4 +1,11 @@
 ---
+- name: Ensure journald config directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Configure journald retention
   ansible.builtin.copy:

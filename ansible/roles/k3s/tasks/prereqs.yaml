@@ -91,13 +91,3 @@
 - name: Reload sysctl safely
   ansible.builtin.command: sysctl --system
   changed_when: false
-
-#################################################
-# Install crictl
-#################################################
-
-- name: Install container tools
-  ansible.builtin.apt:
-    name:
-      - cri-tools
-    state: present
