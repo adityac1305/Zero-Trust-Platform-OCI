@@ -1177,101 +1177,6 @@ repos:
     - k3s
 </file>
 
-<file path="ansible/roles/k3s/tasks/main.yaml">
-# ansible/roles/k3s/tasks/main.yaml
----
-- name: Ensure storage is ready
-  ansible.builtin.include_tasks: storage.yaml
-  when: not k3s_config_only
-
-- name: Validate disk
-  ansible.builtin.import_tasks: validate_disk.yaml
-
-- name: Install prerequisites
-  ansible.builtin.include_tasks: prereqs.yaml
-  when: not k3s_config_only
-
-- name: Install or upgrade K3s
-  ansible.builtin.include_tasks: install.yaml
-  when: not k3s_config_only
-
-- name: Apply or update K3s configuration
-  ansible.builtin.import_tasks: config-rollout.yaml
-
-- name: Configure logging
-  ansible.builtin.import_tasks: logging.yaml
-
-- name: Configure cleanup jobs
-  ansible.builtin.import_tasks: cleanup.yaml
-
-- name: Setup kubeconfig
-  ansible.builtin.import_tasks: kubeconfig.yaml
-</file>
-
-<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
----
-- name: Verify /data mount exists
-  ansible.builtin.command:
-    cmd: mountpoint -q /data
-  register: k3s_mount_check
-  changed_when: false
-  failed_when: k3s_mount_check.rc != 0
-
-- name: Get /data usage percent
-  ansible.builtin.shell:
-    cmd: set -o pipefail && df /data | awk 'NR==2 {print $5}' | sed 's/%//'
-    executable: /bin/bash
-  register: k3s_disk_usage
-  changed_when: false
-
-- name: Show disk usage
-  ansible.builtin.debug:
-    msg: "/data usage {{ k3s_disk_usage.stdout }}%"
-
-- name: Warning threshold 70%
-  ansible.builtin.debug:
-    msg: "WARNING: /data usage above 70%"
-  when: k3s_disk_usage.stdout | int > 70
-
-- name: Cleanup unused container images when disk exceeds 85%
-  ansible.builtin.command:
-    cmd: crictl rmi --prune
-  changed_when: true
-  when:
-    - k3s_disk_usage.stdout | int > 85
-
-- name: Reduce journald size when disk exceeds 85%
-  ansible.builtin.command:
-    cmd: journalctl --vacuum-size=500M
-  changed_when: true
-  when:
-    - k3s_disk_usage.stdout | int > 85
-
-- name: Fail if disk critically full
-  ansible.builtin.fail:
-    msg: "/data critically full (>95%)"
-  when: k3s_disk_usage.stdout | int > 95
-
-- name: Check inode usage
-  ansible.builtin.shell:
-    cmd: set -o pipefail && df -i /data | awk 'NR==2 {print $5}' | sed 's/%//'
-    executable: /bin/bash
-  register: k3s_inode_usage
-  changed_when: false
-
-- name: Fail if inode usage critical
-  ansible.builtin.fail:
-    msg: "Inodes critically full (>90%)"
-  when: k3s_inode_usage.stdout | int > 90
-
-- name: Report disk protection status
-  ansible.builtin.debug:
-    msg:
-      - "/data usage: {{ k3s_disk_usage.stdout }}%"
-      - "inode usage: {{ k3s_inode_usage.stdout }}%"
-      - "cleanup policy active above 85%"
-</file>
-
 <file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
 ---
 
@@ -1649,67 +1554,35 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
-<file path="ansible/roles/k3s/tasks/install.yaml">
+<file path="ansible/roles/k3s/tasks/main.yaml">
+# ansible/roles/k3s/tasks/main.yaml
 ---
+- name: Ensure storage is ready
+  ansible.builtin.include_tasks: storage.yaml
+  when: not k3s_config_only
 
-- name: Get installed K3s version
-  ansible.builtin.command:
-    cmd: k3s --version
-  register: k3s_installed_version
-  failed_when: false
-  changed_when: false
+- name: Validate disk
+  ansible.builtin.import_tasks: validate_disk.yaml
 
-- name: Download K3s installer
-  ansible.builtin.get_url:
-    url: https://get.k3s.io
-    dest: /tmp/k3s-install.sh
-    mode: "0755"
+- name: Install prerequisites
+  ansible.builtin.include_tasks: prereqs.yaml
+  when: not k3s_config_only
 
 - name: Install or upgrade K3s
-  ansible.builtin.command:
-    cmd: /bin/bash /tmp/k3s-install.sh
-  changed_when: true
-  environment:
-    INSTALL_K3S_VERSION: "{{ k3s_version }}"
-    INSTALL_K3S_EXEC: >-
-      server --cluster-init
-      --config /etc/rancher/k3s/config.yaml
-  when:
-    - not k3s_config_only
-    - k3s_installed_version.rc != 0 or
-      k3s_version not in k3s_installed_version.stdout
-  notify:
-    - Restart K3s
+  ansible.builtin.include_tasks: install.yaml
+  when: not k3s_config_only
 
-- name: Enable K3s service
-  ansible.builtin.systemd:
-    name: k3s
-    enabled: true
-    state: started
+- name: Apply or update K3s configuration
+  ansible.builtin.import_tasks: config-rollout.yaml
 
-- name: Wait for K3s service
-  ansible.builtin.systemd:
-    name: k3s
-    state: started
-  register: k3s_service
-  retries: 10
-  delay: 15
-  until: k3s_service.status.ActiveState == "active"
+- name: Configure logging
+  ansible.builtin.import_tasks: logging.yaml
 
-- name: Wait for K3s node token
-  ansible.builtin.wait_for:
-    path: "{{ k3s_data_dir }}/server/node-token"
-    timeout: 300
+- name: Configure cleanup jobs
+  ansible.builtin.import_tasks: cleanup.yaml
 
-- name: Verify K3s node
-  ansible.builtin.command:
-    cmd: kubectl --kubeconfig {{ k3s_kubeconfig_path }} get nodes
-  register: k3s_nodes
-  changed_when: false
-
-- name: Display node status
-  ansible.builtin.debug:
-    var: k3s_nodes.stdout_lines
+- name: Setup kubeconfig
+  ansible.builtin.import_tasks: kubeconfig.yaml
 </file>
 
 <file path="ansible/roles/k3s/tasks/prereqs.yaml">
@@ -1818,6 +1691,70 @@ jobs:
     state: present
 </file>
 
+<file path="ansible/roles/k3s/tasks/validate_disk.yaml">
+---
+- name: Verify /data mount exists
+  ansible.builtin.command:
+    cmd: mountpoint -q /data
+  register: k3s_mount_check
+  changed_when: false
+  failed_when: k3s_mount_check.rc != 0
+
+- name: Get /data usage percent
+  ansible.builtin.shell:
+    cmd: set -o pipefail && df /data | awk 'NR==2 {print $5}' | sed 's/%//'
+    executable: /bin/bash
+  register: k3s_disk_usage
+  changed_when: false
+
+- name: Show disk usage
+  ansible.builtin.debug:
+    msg: "/data usage {{ k3s_disk_usage.stdout }}%"
+
+- name: Warning threshold 70%
+  ansible.builtin.debug:
+    msg: "WARNING: /data usage above 70%"
+  when: k3s_disk_usage.stdout | int > 70
+
+- name: Cleanup unused container images when disk exceeds 85%
+  ansible.builtin.command:
+    cmd: crictl rmi --prune
+  changed_when: true
+  when:
+    - k3s_disk_usage.stdout | int > 85
+
+- name: Reduce journald size when disk exceeds 85%
+  ansible.builtin.command:
+    cmd: journalctl --vacuum-size=500M
+  changed_when: true
+  when:
+    - k3s_disk_usage.stdout | int > 85
+
+- name: Fail if disk critically full
+  ansible.builtin.fail:
+    msg: "/data critically full (>95%)"
+  when: k3s_disk_usage.stdout | int > 95
+
+- name: Check inode usage
+  ansible.builtin.shell:
+    cmd: set -o pipefail && df -i /data | awk 'NR==2 {print $5}' | sed 's/%//'
+    executable: /bin/bash
+  register: k3s_inode_usage
+  changed_when: false
+
+- name: Fail if inode usage critical
+  ansible.builtin.fail:
+    msg: "Inodes critically full (>90%)"
+  when: k3s_inode_usage.stdout | int > 90
+
+- name: Report disk protection status
+  ansible.builtin.debug:
+    msg:
+      - "/data usage: {{ k3s_disk_usage.stdout }}%"
+      - "inode usage: {{ k3s_inode_usage.stdout }}%"
+      - "cleanup policy active above 85%"
+</file>
+
 <file path="ansible/playbooks/site.yml">
 ---
 
@@ -1826,6 +1763,69 @@ jobs:
 
 - name: K3s Bootstrap
   import_playbook: k3s-bootstrap.yml
+</file>
+
+<file path="ansible/roles/k3s/tasks/install.yaml">
+---
+
+- name: Get installed K3s version
+  ansible.builtin.command:
+    cmd: k3s --version
+  register: k3s_installed_version
+  failed_when: false
+  changed_when: false
+
+- name: Download K3s installer
+  ansible.builtin.get_url:
+    url: https://get.k3s.io
+    dest: /tmp/k3s-install.sh
+    mode: "0755"
+
+- name: Install or upgrade K3s
+  ansible.builtin.command:
+    cmd: /bin/bash /tmp/k3s-install.sh
+  changed_when: true
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+    INSTALL_K3S_EXEC: >-
+      server --cluster-init
+      --config /etc/rancher/k3s/config.yaml
+  when:
+    - not k3s_config_only
+    - k3s_installed_version.rc != 0 or
+      k3s_version not in k3s_installed_version.stdout
+  notify:
+    - Restart K3s
+
+- name: Enable K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Wait for K3s service
+  ansible.builtin.systemd:
+    name: k3s
+    state: started
+  register: k3s_service
+  retries: 10
+  delay: 15
+  until: k3s_service.status.ActiveState == "active"
+
+- name: Wait for K3s node token
+  ansible.builtin.wait_for:
+    path: "{{ k3s_data_dir }}/server/node-token"
+    timeout: 300
+
+- name: Verify K3s node
+  ansible.builtin.command:
+    cmd: kubectl --kubeconfig {{ k3s_kubeconfig_path }} get nodes
+  register: k3s_nodes
+  changed_when: false
+
+- name: Display node status
+  ansible.builtin.debug:
+    var: k3s_nodes.stdout_lines
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/main.yml">
@@ -1846,6 +1846,236 @@ jobs:
 
 - name: Sysctl configuration
   ansible.builtin.import_tasks: sysctl.yml
+</file>
+
+<file path="repo_structure.txt">
+Folder PATH listing for volume Data
+Volume serial number is 0000008D C87A:83A4
+D:.
+|   .gitignore
+|   .pre-commit-config.yaml
+|   repomix-output.xml
+|   repo_structure.txt
+|   
++---.github
+|   \---workflows
+|           ansible-ci.yaml
+|           infrastructure-deploy.yaml
+|           opentofu-ci.yaml
+|           security-ci.yaml
+|           
++---ansible
+|   |   ansible.cfg
+|   |   requirements.yml
+|   |   
+|   +---inventories
+|   |   +---dev
+|   |   \---lab
+|   |       |   hosts.ini
+|   |       |   
+|   |       \---group_vars
+|   |               all.yml
+|   |               
+|   +---playbooks
+|   |       k3s-bootstrap.yml
+|   |       k3s-config-rollout.yml
+|   |       os-bootstrap.yml
+|   |       os-rollback.yml
+|   |       site.yml
+|   |       
+|   \---roles
+|       +---k3s
+|       |   +---defaults
+|       |   |       main.yaml
+|       |   |       
+|       |   +---handlers
+|       |   |       main.yaml
+|       |   |       
+|       |   +---tasks
+|       |   |       cleanup.yaml
+|       |   |       config-rollout.yaml
+|       |   |       install.yaml
+|       |   |       kubeconfig.yaml
+|       |   |       logging.yaml
+|       |   |       main.yaml
+|       |   |       prereqs.yaml
+|       |   |       storage.yaml
+|       |   |       validate_disk.yaml
+|       |   |       
+|       |   \---templates
+|       |           config.yaml.j2
+|       |           
+|       \---os-bootstrap
+|           \---tasks
+|                   fail2ban.yml
+|                   firewall.yml
+|                   main.yml
+|                   packages.yml
+|                   ssh.yml
+|                   sysctl.yml
+|                   
++---helm
+\---opentofu
+    +---bootstrap
+    |   \---state-backend
+    |       |   .terraform.lock.hcl
+    |       |   bootstrap.tfplan
+    |       |   bootstrap.tfvars
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   terraform.tfstate
+    |       |   terraform.tfstate.backup
+    |       |   variables.tf
+    |       |   
+    |       +---.terraform
+    |       |   \---providers
+    |       |       \---registry.opentofu.org
+    |       |           \---oracle
+    |       |               \---oci
+    |       |                   \---8.17.0
+    |       |                       |   windows_amd64.lock
+    |       |                       |   
+    |       |                       \---windows_amd64
+    |       |                               terraform-provider-oci_v8.17.0
+    |       |                               
+    |       \---scripts
+    |               apply.sh
+    |               destroy.sh
+    |               init.sh
+    |               plan.sh
+    |               
+    +---environments
+    |   +---dev
+    |   \---lab
+    |       |   .terraform.lock.hcl
+    |       |   backend.tf
+    |       |   lab.tfplan
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   providers.tf
+    |       |   terraform.tfvars
+    |       |   variables.tf
+    |       |   versions.tf
+    |       |   
+    |       \---.terraform
+    |           |   terraform.tfstate
+    |           |   
+    |           \---providers
+    |               \---registry.opentofu.org
+    |                   \---oracle
+    |                       \---oci
+    |                           \---8.15.0
+    |                               |   windows_amd64.lock
+    |                               |   
+    |                               \---windows_amd64
+    |                                       terraform-provider-oci_v8.15.0
+    |                                       
+    +---modules
+    \---scripts
+            apply.sh
+            destroy.sh
+            init.sh
+            plan.sh
+            retry-apply.sh
+</file>
+
+<file path=".github/workflows/ansible-ci.yaml">
+---
+
+name: Ansible CI
+
+on:
+  pull_request:
+    paths:
+      - "ansible/**"
+  workflow_dispatch:
+
+jobs:
+
+  syntax:
+    name: Ansible Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ansible
+      - name: Install Ansible + dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ansible
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
+
+      - name: Syntax Check OS Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/os-bootstrap.yml \
+            --syntax-check
+
+
+  lint:
+    name: Ansible Lint
+    runs-on: ubuntu-latest
+    needs: syntax
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ansible
+
+      - name: Install Ansible + lint
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ansible ansible-lint
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
+
+      - name: Run ansible-lint (entire repo)
+        run: |
+          ansible-lint ansible/
+
+      - name: Syntax Check K3s Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-bootstrap.yml \
+            --syntax-check
+
+      - name: Syntax Check K3s Config Rollout
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-config-rollout.yml \
+            --syntax-check
 </file>
 
 <file path=".github/workflows/infrastructure-deploy.yaml">
@@ -2121,236 +2351,6 @@ jobs:
           -i inventory/hosts.ini \
           ansible/playbooks/k3s-config-rollout.yml \
           --private-key key.pem
-</file>
-
-<file path="repo_structure.txt">
-Folder PATH listing for volume Data
-Volume serial number is 0000008D C87A:83A4
-D:.
-|   .gitignore
-|   .pre-commit-config.yaml
-|   repomix-output.xml
-|   repo_structure.txt
-|   
-+---.github
-|   \---workflows
-|           ansible-ci.yaml
-|           infrastructure-deploy.yaml
-|           opentofu-ci.yaml
-|           security-ci.yaml
-|           
-+---ansible
-|   |   ansible.cfg
-|   |   requirements.yml
-|   |   
-|   +---inventories
-|   |   +---dev
-|   |   \---lab
-|   |       |   hosts.ini
-|   |       |   
-|   |       \---group_vars
-|   |               all.yml
-|   |               
-|   +---playbooks
-|   |       k3s-bootstrap.yml
-|   |       k3s-config-rollout.yml
-|   |       os-bootstrap.yml
-|   |       os-rollback.yml
-|   |       site.yml
-|   |       
-|   \---roles
-|       +---k3s
-|       |   +---defaults
-|       |   |       main.yaml
-|       |   |       
-|       |   +---handlers
-|       |   |       main.yaml
-|       |   |       
-|       |   +---tasks
-|       |   |       cleanup.yaml
-|       |   |       config-rollout.yaml
-|       |   |       install.yaml
-|       |   |       kubeconfig.yaml
-|       |   |       logging.yaml
-|       |   |       main.yaml
-|       |   |       prereqs.yaml
-|       |   |       storage.yaml
-|       |   |       validate_disk.yaml
-|       |   |       
-|       |   \---templates
-|       |           config.yaml.j2
-|       |           
-|       \---os-bootstrap
-|           \---tasks
-|                   fail2ban.yml
-|                   firewall.yml
-|                   main.yml
-|                   packages.yml
-|                   ssh.yml
-|                   sysctl.yml
-|                   
-+---helm
-\---opentofu
-    +---bootstrap
-    |   \---state-backend
-    |       |   .terraform.lock.hcl
-    |       |   bootstrap.tfplan
-    |       |   bootstrap.tfvars
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   terraform.tfstate
-    |       |   terraform.tfstate.backup
-    |       |   variables.tf
-    |       |   
-    |       +---.terraform
-    |       |   \---providers
-    |       |       \---registry.opentofu.org
-    |       |           \---oracle
-    |       |               \---oci
-    |       |                   \---8.17.0
-    |       |                       |   windows_amd64.lock
-    |       |                       |   
-    |       |                       \---windows_amd64
-    |       |                               terraform-provider-oci_v8.17.0
-    |       |                               
-    |       \---scripts
-    |               apply.sh
-    |               destroy.sh
-    |               init.sh
-    |               plan.sh
-    |               
-    +---environments
-    |   +---dev
-    |   \---lab
-    |       |   .terraform.lock.hcl
-    |       |   backend.tf
-    |       |   lab.tfplan
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   providers.tf
-    |       |   terraform.tfvars
-    |       |   variables.tf
-    |       |   versions.tf
-    |       |   
-    |       \---.terraform
-    |           |   terraform.tfstate
-    |           |   
-    |           \---providers
-    |               \---registry.opentofu.org
-    |                   \---oracle
-    |                       \---oci
-    |                           \---8.15.0
-    |                               |   windows_amd64.lock
-    |                               |   
-    |                               \---windows_amd64
-    |                                       terraform-provider-oci_v8.15.0
-    |                                       
-    +---modules
-    \---scripts
-            apply.sh
-            destroy.sh
-            init.sh
-            plan.sh
-            retry-apply.sh
-</file>
-
-<file path=".github/workflows/ansible-ci.yaml">
----
-
-name: Ansible CI
-
-on:
-  pull_request:
-    paths:
-      - "ansible/**"
-  workflow_dispatch:
-
-jobs:
-
-  syntax:
-    name: Ansible Syntax Check
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-ansible
-      - name: Install Ansible + dependencies
-        run: |
-          python3 -m pip install --upgrade pip
-          pip3 install ansible
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Syntax Check OS Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/os-bootstrap.yml \
-            --syntax-check
-
-
-  lint:
-    name: Ansible Lint
-    runs-on: ubuntu-latest
-    needs: syntax
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-ansible
-
-      - name: Install Ansible + lint
-        run: |
-          python3 -m pip install --upgrade pip
-          pip3 install ansible ansible-lint
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Run ansible-lint (entire repo)
-        run: |
-          ansible-lint ansible/
-
-      - name: Syntax Check K3s Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/k3s-bootstrap.yml \
-            --syntax-check
-
-      - name: Syntax Check K3s Config Rollout
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/k3s-config-rollout.yml \
-            --syntax-check
 </file>
 
 </files>

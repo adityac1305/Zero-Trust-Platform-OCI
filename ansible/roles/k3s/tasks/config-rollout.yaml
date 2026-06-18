@@ -12,7 +12,7 @@
   ansible.builtin.stat:
     path: /etc/rancher/k3s/config.yaml
     checksum_algorithm: sha256
-  register: old_k3s_config
+  register: k3s_old_config
 
 - name: Render K3s configuration
   ansible.builtin.template:
@@ -26,14 +26,14 @@
   ansible.builtin.stat:
     path: /etc/rancher/k3s/config.yaml
     checksum_algorithm: sha256
-  register: new_k3s_config
+  register: k3s_new_config
 
 - name: Detect K3s config change
   ansible.builtin.set_fact:
     k3s_config_changed: >-
       {{
-        old_k3s_config.stat.checksum | default('') !=
-        new_k3s_config.stat.checksum
+        k3s_old_config.stat.checksum | default('') !=
+        k3s_new_config.stat.checksum
       }}
 
 - name: Restart K3s when config changed
