@@ -47,8 +47,6 @@ The content is organized as follows:
 .gitignore
 .pre-commit-config.yaml
 ansible/ansible.cfg
-ansible/inventories/dev/group_vars/all.yml
-ansible/inventories/dev/hosts.ini
 ansible/inventories/lab/group_vars/all.yml
 ansible/inventories/lab/hosts.ini
 ansible/playbooks/k3s-bootstrap.yml
@@ -56,9 +54,7 @@ ansible/playbooks/k3s-config-rollout.yml
 ansible/playbooks/os-bootstrap.yml
 ansible/playbooks/os-rollback.yml
 ansible/playbooks/site.yml
-ansible/playbooks/vault.yml
 ansible/requirements.yml
-ansible/roles/k3s/defaults/config.yaml
 ansible/roles/k3s/defaults/main.yaml
 ansible/roles/k3s/handlers/main.yaml
 ansible/roles/k3s/tasks/cleanup.yaml
@@ -71,22 +67,12 @@ ansible/roles/k3s/tasks/prereqs.yaml
 ansible/roles/k3s/tasks/storage.yaml
 ansible/roles/k3s/tasks/validate_disk.yaml
 ansible/roles/k3s/templates/config.yaml.j2
-ansible/roles/os-bootstrap/defaults/main.yml
-ansible/roles/os-bootstrap/handlers/main.yml
-ansible/roles/os-bootstrap/tasks/cleanup.yml
 ansible/roles/os-bootstrap/tasks/fail2ban.yml
 ansible/roles/os-bootstrap/tasks/firewall.yml
 ansible/roles/os-bootstrap/tasks/main.yml
 ansible/roles/os-bootstrap/tasks/packages.yml
 ansible/roles/os-bootstrap/tasks/ssh.yml
 ansible/roles/os-bootstrap/tasks/sysctl.yml
-ansible/roles/os-bootstrap/tasks/users.yml
-ansible/roles/os-bootstrap/vars/main.yml
-ansible/scripts/backup-configs.sh
-ansible/scripts/bootstrap-kubeconfig.sh
-ansible/scripts/generate-inventory.sh
-ansible/scripts/restore-configs.sh
-ansible/scripts/wait-for-ssh.sh
 opentofu/bootstrap/state-backend/.terraform.lock.hcl
 opentofu/bootstrap/state-backend/main.tf
 opentofu/bootstrap/state-backend/outputs.tf
@@ -125,25 +111,6 @@ This section contains the contents of the repository's files.
 
   roles:
     - k3s
-</file>
-
-<file path="ansible/roles/k3s/defaults/config.yaml">
----
-
-k3s_config:
-
-  data_dir: /data/platform/kubernetes/k3s
-
-  disable:
-    - traefik
-
-  kube_apiserver:
-    event_ttl: 1h
-
-  kubelet:
-    max_pods: 110
-    container_log_max_size: 10Mi
-    container_log_max_files: 5
 </file>
 
 <file path="ansible/roles/k3s/tasks/cleanup.yaml">
@@ -269,49 +236,6 @@ kubelet-arg:
   - max-pods={{ k3s_config.kubelet.max_pods }}
   - container-log-max-size={{ k3s_config.kubelet.container_log_max_size }}
   - container-log-max-files={{ k3s_config.kubelet.container_log_max_files }}
-</file>
-
-<file path="ansible/inventories/dev/group_vars/all.yml">
-
-</file>
-
-<file path="ansible/inventories/dev/hosts.ini">
-
-</file>
-
-<file path="ansible/roles/k3s/handlers/main.yaml">
----
-- name: Restart K3s (safe)
-  ansible.builtin.systemd:
-    name: k3s
-    state: restarted
-    daemon_reload: true
-  listen: Restart K3s
-
-- name: Restart journald
-  ansible.builtin.systemd:
-    name: systemd-journald
-    state: restarted
-</file>
-
-<file path="ansible/scripts/backup-configs.sh">
-#!/usr/bin/env bash
-</file>
-
-<file path="ansible/scripts/bootstrap-kubeconfig.sh">
-#!/usr/bin/env bash
-</file>
-
-<file path="ansible/scripts/generate-inventory.sh">
-#!/usr/bin/env bash
-</file>
-
-<file path="ansible/scripts/restore-configs.sh">
-#!/usr/bin/env bash
-</file>
-
-<file path="ansible/scripts/wait-for-ssh.sh">
-#!/usr/bin/env bash
 </file>
 
 <file path="opentofu/bootstrap/state-backend/.terraform.lock.hcl">
@@ -628,25 +552,19 @@ collections:
   - name: ansible.posix
 </file>
 
-<file path="ansible/roles/k3s/defaults/main.yaml">
-# ansible/roles/k3s/defaults/main.yaml
+<file path="ansible/roles/k3s/handlers/main.yaml">
 ---
-k3s_version: "v1.33.1+k3s1"
-k3s_data_dir: /data/platform/kubernetes/k3s
-k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
-k3s_install: true
-k3s_config_only: false
+- name: Restart K3s (safe)
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+    daemon_reload: true
+  listen: Restart K3s
 
-k3s_config:
-  data_dir: /data/platform/kubernetes/k3s
-  disable:
-    - traefik
-  kube_apiserver:
-    event_ttl: 1h
-  kubelet:
-    max_pods: 110
-    container_log_max_size: 10Mi
-    container_log_max_files: 5
+- name: Restart journald
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -1023,12 +941,25 @@ ansible_python_interpreter: /usr/bin/python3
         state: restarted
 </file>
 
-<file path="ansible/playbooks/vault.yml">
+<file path="ansible/roles/k3s/defaults/main.yaml">
+# ansible/roles/k3s/defaults/main.yaml
 ---
-- name: Vault Playbook
-  hosts: all
-  gather_facts: false
-  tasks: []
+k3s_version: "v1.33.1+k3s1"
+k3s_data_dir: /data/platform/kubernetes/k3s
+k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+k3s_install: true
+k3s_config_only: false
+
+k3s_config:
+  data_dir: /data/platform/kubernetes/k3s
+  disable:
+    - traefik
+  kube_apiserver:
+    event_ttl: 1h
+  kubelet:
+    max_pods: 110
+    container_log_max_size: 10Mi
+    container_log_max_files: 5
 </file>
 
 <file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
@@ -1054,37 +985,6 @@ ansible_python_interpreter: /usr/bin/python3
     owner: ubuntu
     group: ubuntu
     mode: "0600"
-</file>
-
-<file path="ansible/roles/k3s/tasks/main.yaml">
-# ansible/roles/k3s/tasks/main.yaml
----
-- name: Ensure storage is ready
-  ansible.builtin.include_tasks: storage.yaml
-  when: not k3s_config_only
-
-- name: Validate disk
-  import_tasks: validate_disk.yaml
-
-- name: Install prerequisites
-  ansible.builtin.include_tasks: prereqs.yaml
-  when: not k3s_config_only
-
-- name: Install or upgrade K3s
-  ansible.builtin.include_tasks: install.yaml
-  when: not k3s_config_only
-
-- name: Apply or update K3s configuration
-  import_tasks: config-rollout.yaml
-
-- name: Configure logging
-  import_tasks: logging.yaml
-
-- name: Configure cleanup jobs
-  import_tasks: cleanup.yaml
-
-- name: Setup kubeconfig
-  import_tasks: kubeconfig.yaml
 </file>
 
 <file path="ansible/roles/k3s/tasks/storage.yaml">
@@ -1224,6 +1124,37 @@ ansible_python_interpreter: /usr/bin/python3
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
+<file path="ansible/roles/k3s/tasks/main.yaml">
+# ansible/roles/k3s/tasks/main.yaml
+---
+- name: Ensure storage is ready
+  ansible.builtin.include_tasks: storage.yaml
+  when: not k3s_config_only
+
+- name: Validate disk
+  import_tasks: validate_disk.yaml
+
+- name: Install prerequisites
+  ansible.builtin.include_tasks: prereqs.yaml
+  when: not k3s_config_only
+
+- name: Install or upgrade K3s
+  ansible.builtin.include_tasks: install.yaml
+  when: not k3s_config_only
+
+- name: Apply or update K3s configuration
+  import_tasks: config-rollout.yaml
+
+- name: Configure logging
+  import_tasks: logging.yaml
+
+- name: Configure cleanup jobs
+  import_tasks: cleanup.yaml
+
+- name: Setup kubeconfig
+  import_tasks: kubeconfig.yaml
+</file>
+
 <file path="ansible/roles/k3s/tasks/validate_disk.yaml">
 ---
 - name: Verify /data mount exists
@@ -1286,24 +1217,32 @@ ansible_python_interpreter: /usr/bin/python3
       - "cleanup policy active above 85%"
 </file>
 
-<file path="ansible/roles/os-bootstrap/defaults/main.yml">
+<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
 ---
+
+- name: Enable fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
 </file>
 
-<file path="ansible/roles/os-bootstrap/handlers/main.yml">
+<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
 ---
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/cleanup.yml">
----
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/users.yml">
----
-</file>
-
-<file path="ansible/roles/os-bootstrap/vars/main.yml">
----
+- name: Install utility packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - jq
+      - vim
+      - git
+      - unzip
+      - htop
+      - fail2ban
+      - socat
+      - conntrack
+    state: present
+    update_cache: true
 </file>
 
 <file path=".github/workflows/infrastructure-deploy.yaml">
@@ -1327,6 +1266,7 @@ jobs:
     outputs:
       tofu: ${{ steps.filter.outputs.tofu }}
       k3s_config: ${{ steps.filter.outputs.k3s_config }}
+      k3s_version: ${{ steps.filter.outputs.k3s_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -1338,6 +1278,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tofu=true" >> $GITHUB_OUTPUT
             echo "k3s_config=true" >> $GITHUB_OUTPUT
+            echo "k3s_version=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           CHANGED=$(git diff --name-only HEAD^ HEAD)
@@ -1352,6 +1293,11 @@ jobs:
             K3S_CHANGED=true
           fi
           echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
+          K3S_VERSION_CHANGED=false
+          if echo "$CHANGED" | grep -q "^ansible/roles/k3s/defaults/main.yaml"; then
+            K3S_VERSION_CHANGED=true
+          fi
+          echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT
 ############################################################
 # 1. OPEN TOFU PLAN
 ############################################################
@@ -1453,6 +1399,7 @@ jobs:
       vm_ip: ${{ steps.extract.outputs.vm_ip }}
       tofu: ${{ needs.changes.outputs.tofu }}
       k3s_config: ${{ needs.changes.outputs.k3s_config }}
+      k3s_version: ${{ needs.changes.outputs.k3s_version }}
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
@@ -1487,7 +1434,10 @@ jobs:
     if: |
       always() &&
       needs.inventory.result == 'success' &&
-      needs.inventory.outputs.tofu == 'true'
+      (
+        needs.inventory.outputs.tofu == 'true' ||
+        needs.inventory.outputs.k3s_version == 'true'
+      )
     name: Run Full Ansible Bootstrap
     runs-on: ubuntu-latest
     needs:
@@ -1562,6 +1512,27 @@ jobs:
           --private-key key.pem
 </file>
 
+<file path=".pre-commit-config.yaml">
+---
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+</file>
+
+<file path="ansible/playbooks/k3s-bootstrap.yml">
+---
+
+- name: K3s Bootstrap
+  hosts: k3s
+  become: true
+
+  roles:
+    - k3s
+</file>
+
 <file path="ansible/roles/k3s/tasks/install.yaml">
 ---
 
@@ -1620,161 +1591,6 @@ jobs:
 - name: Display node status
   ansible.builtin.debug:
     var: k3s_nodes.stdout_lines
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
----
-
-- name: Enable fail2ban
-  ansible.builtin.service:
-    name: fail2ban
-    enabled: true
-    state: started
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
----
-- name: Install utility packages
-  ansible.builtin.apt:
-    name:
-      - curl
-      - jq
-      - vim
-      - git
-      - unzip
-      - htop
-      - fail2ban
-      - socat
-      - conntrack
-    state: present
-    update_cache: true
-</file>
-
-<file path=".pre-commit-config.yaml">
----
-
-repos:
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.0
-    hooks:
-      - id: gitleaks
-</file>
-
-<file path="ansible/playbooks/k3s-bootstrap.yml">
----
-
-- name: K3s Bootstrap
-  hosts: k3s
-  become: true
-
-  roles:
-    - k3s
-</file>
-
-<file path="ansible/roles/k3s/tasks/prereqs.yaml">
----
-
-- name: Install K3s dependencies
-  ansible.builtin.apt:
-    name:
-      - curl
-      - wget
-      - ca-certificates
-      - apt-transport-https
-      - gnupg
-      - software-properties-common
-      - iptables
-      - iproute2
-      - ebtables
-      - ethtool
-    state: present
-    update_cache: true
-
-#################################################
-# KERNEL MODULES (CRITICAL FOR K3s)
-#################################################
-
-- name: Load required kernel modules
-  community.general.modprobe:
-    name: "{{ item }}"
-    state: present
-  loop:
-    - br_netfilter
-    - overlay
-
-- name: Persist kernel modules for reboot
-  ansible.builtin.copy:
-    dest: /etc/modules-load.d/k3s.conf
-    content: |
-      br_netfilter
-      overlay
-    mode: "0644"
-
-#################################################
-# SAFE SYSCTL FOR K3s
-#################################################
-
-- name: Enable IPv4 forwarding
-  ansible.posix.sysctl:
-    name: net.ipv4.ip_forward
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-
-- name: Check bridge sysctl availability
-  ansible.builtin.stat:
-    path: /proc/sys/net/bridge
-  register: k3s_bridge_sysctl
-  changed_when: false
-
-- name: Apply bridge netfilter sysctl (if supported)
-  ansible.posix.sysctl:
-    name: "{{ item }}"
-    value: "1"
-    state: present
-    reload: true
-    ignoreerrors: true
-  loop:
-    - net.bridge.bridge-nf-call-iptables
-    - net.bridge.bridge-nf-call-ip6tables
-  when: k3s_bridge_sysctl.stat.exists
-
-#################################################
-# OPTIONAL WARNING
-#################################################
-
-- name: Warn if bridge sysctl is unavailable
-  ansible.builtin.debug:
-    msg: "Bridge sysctl not available; kernel module may not be fully ready"
-  when: not k3s_bridge_sysctl.stat.exists
-
-#################################################
-# SYSTEM NETWORKING TUNING
-#################################################
-
-- name: Ensure system networking config file exists
-  ansible.builtin.copy:
-    dest: /etc/sysctl.d/99-k3s.conf
-    mode: "0644"
-    content: |
-      net.ipv4.ip_forward = 1
-      net.bridge.bridge-nf-call-iptables = 1
-      net.bridge.bridge-nf-call-ip6tables = 1
-
-- name: Reload sysctl safely
-  ansible.builtin.command: sysctl --system
-  changed_when: false
-
-#################################################
-# Install crictl
-#################################################
-
-- name: Install container tools
-  ansible.builtin.apt:
-    name:
-      - cri-tools
-    state: present
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
@@ -2154,6 +1970,112 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
+<file path="ansible/roles/k3s/tasks/prereqs.yaml">
+---
+
+- name: Install K3s dependencies
+  ansible.builtin.apt:
+    name:
+      - curl
+      - wget
+      - ca-certificates
+      - apt-transport-https
+      - gnupg
+      - software-properties-common
+      - iptables
+      - iproute2
+      - ebtables
+      - ethtool
+    state: present
+    update_cache: true
+
+#################################################
+# KERNEL MODULES (CRITICAL FOR K3s)
+#################################################
+
+- name: Load required kernel modules
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - br_netfilter
+    - overlay
+
+- name: Persist kernel modules for reboot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/k3s.conf
+    content: |
+      br_netfilter
+      overlay
+    mode: "0644"
+
+#################################################
+# SAFE SYSCTL FOR K3s
+#################################################
+
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+
+- name: Check bridge sysctl availability
+  ansible.builtin.stat:
+    path: /proc/sys/net/bridge
+  register: k3s_bridge_sysctl
+  changed_when: false
+
+- name: Apply bridge netfilter sysctl (if supported)
+  ansible.posix.sysctl:
+    name: "{{ item }}"
+    value: "1"
+    state: present
+    reload: true
+    ignoreerrors: true
+  loop:
+    - net.bridge.bridge-nf-call-iptables
+    - net.bridge.bridge-nf-call-ip6tables
+  when: k3s_bridge_sysctl.stat.exists
+
+#################################################
+# OPTIONAL WARNING
+#################################################
+
+- name: Warn if bridge sysctl is unavailable
+  ansible.builtin.debug:
+    msg: "Bridge sysctl not available; kernel module may not be fully ready"
+  when: not k3s_bridge_sysctl.stat.exists
+
+#################################################
+# SYSTEM NETWORKING TUNING
+#################################################
+
+- name: Ensure system networking config file exists
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/99-k3s.conf
+    mode: "0644"
+    content: |
+      net.ipv4.ip_forward = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.bridge.bridge-nf-call-ip6tables = 1
+
+- name: Reload sysctl safely
+  ansible.builtin.command: sysctl --system
+  changed_when: false
+
+#################################################
+# Install crictl
+#################################################
+
+- name: Install container tools
+  ansible.builtin.apt:
+    name:
+      - cri-tools
+    state: present
+</file>
+
 <file path="ansible/roles/os-bootstrap/tasks/main.yml">
 ---
 # Main Task Loader
@@ -2175,98 +2097,6 @@ jobs:
 
 - name: Sysctl configuration
   ansible.builtin.import_tasks: sysctl.yml
-</file>
-
-<file path=".github/workflows/ansible-ci.yaml">
----
-
-name: Ansible CI
-
-on:
-  pull_request:
-    paths:
-      - "ansible/**"
-  workflow_dispatch:
-
-jobs:
-
-  syntax:
-    name: Ansible Syntax Check
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Ansible + dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Syntax Check OS Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/os-bootstrap.yml \
-            --syntax-check
-
-
-  lint:
-    name: Ansible Lint
-    runs-on: ubuntu-latest
-    needs: syntax
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Ansible + lint
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ansible python3-pip
-          pip3 install --upgrade pip ansible-lint
-
-      - name: Install required Ansible collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-
-      - name: Set Ansible config
-        run: |
-          echo \
-          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-          >> $GITHUB_ENV
-
-      - name: Run ansible-lint (entire repo)
-        run: |
-          ansible-lint ansible/
-
-      - name: Syntax Check K3s Bootstrap
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/k3s-bootstrap.yml \
-            --syntax-check
-
-      - name: Syntax Check K3s Config Rollout
-        working-directory: ansible
-        run: |
-          ansible-playbook \
-            -i inventories/lab/hosts.ini \
-            playbooks/k3s-config-rollout.yml \
-            --syntax-check
 </file>
 
 <file path="ansible/playbooks/site.yml">
@@ -2430,6 +2260,98 @@ D:.
             init.sh
             plan.sh
             retry-apply.sh
+</file>
+
+<file path=".github/workflows/ansible-ci.yaml">
+---
+
+name: Ansible CI
+
+on:
+  pull_request:
+    paths:
+      - "ansible/**"
+  workflow_dispatch:
+
+jobs:
+
+  syntax:
+    name: Ansible Syntax Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible + dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
+
+      - name: Syntax Check OS Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/os-bootstrap.yml \
+            --syntax-check
+
+
+  lint:
+    name: Ansible Lint
+    runs-on: ubuntu-latest
+    needs: syntax
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ansible + lint
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible python3-pip
+          pip3 install --upgrade pip ansible-lint
+
+      - name: Install required Ansible collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+
+      - name: Set Ansible config
+        run: |
+          echo \
+          "ANSIBLE_CONFIG=${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+          >> $GITHUB_ENV
+
+      - name: Run ansible-lint (entire repo)
+        run: |
+          ansible-lint ansible/
+
+      - name: Syntax Check K3s Bootstrap
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-bootstrap.yml \
+            --syntax-check
+
+      - name: Syntax Check K3s Config Rollout
+        working-directory: ansible
+        run: |
+          ansible-playbook \
+            -i inventories/lab/hosts.ini \
+            playbooks/k3s-config-rollout.yml \
+            --syntax-check
 </file>
 
 </files>

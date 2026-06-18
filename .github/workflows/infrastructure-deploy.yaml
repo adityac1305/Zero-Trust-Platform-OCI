@@ -18,6 +18,7 @@ jobs:
     outputs:
       tofu: ${{ steps.filter.outputs.tofu }}
       k3s_config: ${{ steps.filter.outputs.k3s_config }}
+      k3s_version: ${{ steps.filter.outputs.k3s_version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,6 +30,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "tofu=true" >> $GITHUB_OUTPUT
             echo "k3s_config=true" >> $GITHUB_OUTPUT
+            echo "k3s_version=true" >> $GITHUB_OUTPUT
             exit 0
           fi
           CHANGED=$(git diff --name-only HEAD^ HEAD)
@@ -43,6 +45,11 @@ jobs:
             K3S_CHANGED=true
           fi
           echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
+          K3S_VERSION_CHANGED=false
+          if echo "$CHANGED" | grep -q "^ansible/roles/k3s/defaults/main.yaml"; then
+            K3S_VERSION_CHANGED=true
+          fi
+          echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT
 ############################################################
 # 1. OPEN TOFU PLAN
 ############################################################
@@ -144,6 +151,7 @@ jobs:
       vm_ip: ${{ steps.extract.outputs.vm_ip }}
       tofu: ${{ needs.changes.outputs.tofu }}
       k3s_config: ${{ needs.changes.outputs.k3s_config }}
+      k3s_version: ${{ needs.changes.outputs.k3s_version }}
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
@@ -178,7 +186,10 @@ jobs:
     if: |
       always() &&
       needs.inventory.result == 'success' &&
-      needs.inventory.outputs.tofu == 'true'
+      (
+        needs.inventory.outputs.tofu == 'true' ||
+        needs.inventory.outputs.k3s_version == 'true'
+      )
     name: Run Full Ansible Bootstrap
     runs-on: ubuntu-latest
     needs:
