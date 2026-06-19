@@ -136,6 +136,7 @@
 - name: Check running pods for each known built-in component
   ansible.builtin.shell:
     cmd: |
+      set -o pipefail
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         get pods -n kube-system \
         -l {{ item.labels | first }} \
@@ -194,6 +195,7 @@
 - name: Wait for enabled components to become ready
   ansible.builtin.shell:
     cmd: |
+      set -o pipefail
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         get pods -n kube-system \
         -l {{ item.labels | first }} \
