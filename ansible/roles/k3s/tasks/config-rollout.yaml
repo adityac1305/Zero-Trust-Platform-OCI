@@ -2,7 +2,6 @@
 ################################################################
 # PHASE 1 — RENDER CONFIG
 ################################################################
-
 - name: Ensure K3s config directory exists
   ansible.builtin.file:
     path: /etc/rancher/k3s
@@ -10,13 +9,11 @@
     owner: root
     group: root
     mode: "0755"
-
 - name: Capture existing K3s config checksum
   ansible.builtin.stat:
     path: /etc/rancher/k3s/config.yaml
     checksum_algorithm: sha256
   register: k3s_old_config
-
 - name: Render K3s configuration
   ansible.builtin.template:
     src: config.yaml.j2
@@ -24,13 +21,11 @@
     owner: root
     group: root
     mode: "0644"
-
 - name: Capture new K3s config checksum
   ansible.builtin.stat:
     path: /etc/rancher/k3s/config.yaml
     checksum_algorithm: sha256
   register: k3s_new_config
-
 - name: Detect K3s config change
   ansible.builtin.set_fact:
     k3s_config_changed: >-
@@ -38,16 +33,13 @@
         k3s_old_config.stat.checksum | default('') !=
         k3s_new_config.stat.checksum
       }}
-
 ################################################################
 # PHASE 2 — RECONCILE DISABLED COMPONENTS
 ################################################################
-
 - name: Read rendered K3s config from disk
   ansible.builtin.slurp:
     src: /etc/rancher/k3s/config.yaml
   register: k3s_config_file_raw
-
 - name: Parse disabled components from config
   ansible.builtin.set_fact:
     k3s_disabled_list: >-
@@ -55,56 +47,43 @@
         (k3s_config_file_raw.content | b64decode | from_yaml)
         .get('disable', [])
       }}
-
 - name: Define K3s built-in components
   ansible.builtin.set_fact:
     k3s_builtin_components:
-
       - name: traefik
         selector: "app.kubernetes.io/name=traefik"
         extra_resources:
           - "daemonset/svclb-traefik"
-
       - name: servicelb
         selector: "svccontroller.k3s.cattle.io/svcname"
         extra_resources: []
-
       - name: metrics-server
         selector: "k8s-app=metrics-server"
         extra_resources: []
-
       - name: coredns
         selector: "k8s-app=kube-dns"
         extra_resources: []
-
       - name: local-storage
         selector: "app=local-path-provisioner"
         extra_resources: []
-
 ################################################################
 # REMOVE DISABLED COMPONENTS
 ################################################################
-
 - name: Remove resources for disabled components
   ansible.builtin.shell:
-    executable: /bin/bash   # ✅ FIX
+    executable: /bin/bash
     cmd: |
       set -o pipefail
-
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         delete deployment,daemonset,replicaset,pod,service \
         serviceaccount,configmap,clusterrole,clusterrolebinding,ingressclass \
         -n kube-system \
         -l "{{ item.selector }}" \
         --ignore-not-found || true
-
   loop: "{{ k3s_builtin_components }}"
-
   when:
     - item.name in k3s_disabled_list
-
   changed_when: true
-
 - name: Remove extra named resources for disabled components
   ansible.builtin.shell:
     cmd: |
@@ -112,43 +91,33 @@
         delete {{ item.1 }} \
         -n kube-system \
         --ignore-not-found || true
-
   loop: >-
     {{
       k3s_builtin_components
       | selectattr('name','in',k3s_disabled_list)
       | subelements('extra_resources')
     }}
-
   changed_when: true
-
   when:
     - k3s_disabled_list | length > 0
-
 ################################################################
 # PHASE 3 — CHECK ENABLED COMPONENTS
 ################################################################
-
 - name: Check running pods for enabled components
   ansible.builtin.shell:
+    executable: /bin/bash
     cmd: |
       set -o pipefail
-
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         get pods \
         -n kube-system \
         -l "{{ item.selector }}" \
         --no-headers 2>/dev/null | wc -l
-
   loop: "{{ k3s_builtin_components }}"
-
   register: k3s_component_pod_counts
-
   changed_when: false
-
   when:
     - item.name not in k3s_disabled_list
-
 - name: Identify missing enabled components
   ansible.builtin.set_fact:
     k3s_missing_components: >-
@@ -159,102 +128,75 @@
         | map(attribute='item.name')
         | list
       }}
-
 - name: Report missing components
   ansible.builtin.debug:
     msg:
       - "Missing components detected:"
       - "{{ k3s_missing_components }}"
-
   when:
     - k3s_missing_components | length > 0
-
 ################################################################
 # PHASE 4 — RESTART IF REQUIRED
 ################################################################
-
 - name: Restart K3s when config changed or components missing
   ansible.builtin.systemd:
     name: k3s
     state: restarted
     daemon_reload: true
-
   when:
     - k3s_config_changed or
       k3s_missing_components | length > 0
-
 - name: Wait for K3s API
   ansible.builtin.command:
     cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
-
   register: k3s_validation
-
   changed_when: false
-
   retries: 15
   delay: 15
-
   until:
     - k3s_validation.rc == 0
-
   when:
     - k3s_config_changed or
       k3s_missing_components | length > 0
-
 - name: Wait for enabled components
   ansible.builtin.shell:
+    executable: /bin/bash
     cmd: |
       set -o pipefail
-
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         get pods \
         -n kube-system \
         -l "{{ item.selector }}" \
         --no-headers 2>/dev/null \
         | grep -c Running || true
-
   loop: "{{ k3s_builtin_components }}"
-
   register: k3s_component_ready
-
   changed_when: false
-
   retries: 20
   delay: 15
-
   until:
     - k3s_component_ready.stdout | int > 0
-
   when:
     - k3s_missing_components | length > 0
     - item.name != "servicelb"
-
 ################################################################
 # PHASE 5 — VALIDATION
 ################################################################
-
 - name: Validate K3s node
   ansible.builtin.command:
     cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
-
   register: k3s_validation
-
   changed_when: false
-
 - name: Display node status
   ansible.builtin.debug:
     msg: "{{ k3s_validation.stdout_lines }}"
-
 - name: Get final component status
   ansible.builtin.command:
     cmd: >
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
       get pods -n kube-system --no-headers
-
   register: k3s_final_pods
-
   changed_when: false
-
 - name: Report cluster component state
   ansible.builtin.debug:
     msg: "{{ k3s_final_pods.stdout_lines }}"
