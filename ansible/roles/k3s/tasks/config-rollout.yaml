@@ -87,11 +87,11 @@
     cmd: |
       set -o pipefail
       KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-      for label in {{ item.1 }; do
+      for label in {{ item.1 }}; do
         kubectl --kubeconfig $KUBECONFIG \
           delete deployment,daemonset,replicaset,pod,service,\
-      serviceaccount,configmap,clusterrole,clusterrolebinding,\
-      ingressclass \
+          serviceaccount,configmap,clusterrole,clusterrolebinding,\
+          ingressclass \
           -l "$label" \
           -n kube-system \
           --ignore-not-found 2>/dev/null || true
