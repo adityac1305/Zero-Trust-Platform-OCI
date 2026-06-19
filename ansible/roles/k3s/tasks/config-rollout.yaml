@@ -86,6 +86,7 @@
   changed_when: true
 - name: Remove extra named resources for disabled components
   ansible.builtin.shell:
+    executable: /bin/bash
     cmd: |
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         delete {{ item.1 }} \
@@ -123,8 +124,8 @@
     k3s_missing_components: >-
       {{
         k3s_component_pod_counts.results
-        | selectattr('skipped','undefined')
-        | selectattr('stdout','equalto','0')
+        | selectattr('skipped', 'undefined')
+        | selectattr('stdout', 'equalto', '0')
         | map(attribute='item.name')
         | list
       }}
@@ -143,9 +144,9 @@
     name: k3s
     state: restarted
     daemon_reload: true
-  when:
-    - k3s_config_changed or
-      k3s_missing_components | length > 0
+  when: >-
+    k3s_config_changed | bool or
+    k3s_missing_components | length > 0
 - name: Wait for K3s API
   ansible.builtin.command:
     cmd: kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes
@@ -155,9 +156,9 @@
   delay: 15
   until:
     - k3s_validation.rc == 0
-  when:
-    - k3s_config_changed or
-      k3s_missing_components | length > 0
+  when: >-
+    k3s_config_changed | bool or
+    k3s_missing_components | length > 0
 - name: Wait for enabled components
   ansible.builtin.shell:
     executable: /bin/bash
@@ -178,6 +179,7 @@
     - k3s_component_ready.stdout | int > 0
   when:
     - k3s_missing_components | length > 0
+    - item.name not in k3s_disabled_list
     - item.name != "servicelb"
 ################################################################
 # PHASE 5 — VALIDATION
