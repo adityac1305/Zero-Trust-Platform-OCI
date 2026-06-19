@@ -203,6 +203,7 @@
 - name: Wait for enabled components
   ansible.builtin.shell:
     cmd: |
+      set -o pipefail
 
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         get pods \
