@@ -884,28 +884,6 @@ ansible_python_interpreter: /usr/bin/python3
         state: restarted
 </file>
 
-<file path="ansible/roles/k3s/defaults/main.yaml">
-# ansible/roles/k3s/defaults/main.yaml
----
-# triggering config rollout to clean up disabled components
-k3s_version: "v1.33.1+k3s1"
-k3s_data_dir: /data/platform/kubernetes/k3s
-k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
-k3s_install: true
-k3s_config_only: false
-
-k3s_config:
-  data_dir: /data/platform/kubernetes/k3s
-  disable:
-    - traefik
-  kube_apiserver:
-    event_ttl: 1h
-  kubelet:
-    max_pods: 110
-    container_log_max_size: 10Mi
-    container_log_max_files: 5
-</file>
-
 <file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
 ---
 - name: Ensure kube directory exists
@@ -1066,6 +1044,28 @@ k3s_config:
     - {path: /data/platform, owner: root, mode: "0755"}
     - {path: /data/platform/kubernetes, owner: root, mode: "0755"}
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
+</file>
+
+<file path="ansible/roles/k3s/defaults/main.yaml">
+# ansible/roles/k3s/defaults/main.yaml
+---
+# triggering config rollout to clean up disabled components
+k3s_version: "v1.33.1+k3s1"
+k3s_data_dir: /data/platform/kubernetes/k3s
+k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+k3s_install: true
+k3s_config_only: false
+
+k3s_config:
+  data_dir: /data/platform/kubernetes/k3s
+  disable:
+    - traefik
+  kube_apiserver:
+    event_ttl: 1h
+  kubelet:
+    max_pods: 110
+    container_log_max_size: 10Mi
+    container_log_max_files: 5
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
