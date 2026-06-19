@@ -887,6 +887,7 @@ ansible_python_interpreter: /usr/bin/python3
 <file path="ansible/roles/k3s/defaults/main.yaml">
 # ansible/roles/k3s/defaults/main.yaml
 ---
+# triggering config rollout to clean up disabled components
 k3s_version: "v1.33.1+k3s1"
 k3s_data_dir: /data/platform/kubernetes/k3s
 k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
@@ -1067,6 +1068,55 @@ k3s_config:
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
+<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
+---
+
+- name: Enable fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
+</file>
+
+<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
+---
+- name: Install utility packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - jq
+      - vim
+      - git
+      - unzip
+      - htop
+      - fail2ban
+      - socat
+      - conntrack
+    state: present
+    update_cache: true
+</file>
+
+<file path=".pre-commit-config.yaml">
+---
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.0
+    hooks:
+      - id: gitleaks
+</file>
+
+<file path="ansible/playbooks/k3s-bootstrap.yml">
+---
+
+- name: K3s Bootstrap
+  hosts: k3s
+  become: true
+
+  roles:
+    - k3s
+</file>
+
 <file path="ansible/roles/k3s/tasks/config-rollout.yaml">
 ---
 
@@ -1150,55 +1200,6 @@ k3s_config:
             | default([])
           )
       }}
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
----
-
-- name: Enable fail2ban
-  ansible.builtin.service:
-    name: fail2ban
-    enabled: true
-    state: started
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
----
-- name: Install utility packages
-  ansible.builtin.apt:
-    name:
-      - curl
-      - jq
-      - vim
-      - git
-      - unzip
-      - htop
-      - fail2ban
-      - socat
-      - conntrack
-    state: present
-    update_cache: true
-</file>
-
-<file path=".pre-commit-config.yaml">
----
-
-repos:
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.18.0
-    hooks:
-      - id: gitleaks
-</file>
-
-<file path="ansible/playbooks/k3s-bootstrap.yml">
----
-
-- name: K3s Bootstrap
-  hosts: k3s
-  become: true
-
-  roles:
-    - k3s
 </file>
 
 <file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
