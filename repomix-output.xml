@@ -2375,6 +2375,7 @@ jobs:
 
 - name: Remove resources for disabled components
   ansible.builtin.shell:
+    executable: /bin/bash   # ✅ FIX
     cmd: |
       set -o pipefail
 
