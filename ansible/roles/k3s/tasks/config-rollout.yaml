@@ -40,10 +40,6 @@
 
 ################################################################
 # PHASE 2 — RECONCILE DISABLED COMPONENTS
-# Runs on every rollout regardless of config change.
-# Reads the disable list from the rendered config and removes
-# all resources for any component that should not be running.
-# Uses both label conventions K3s components use.
 ################################################################
 - name: Read rendered K3s config from disk
   ansible.builtin.slurp:
@@ -89,12 +85,13 @@
 - name: Remove all resources for disabled components by label
   ansible.builtin.shell:
     cmd: |
+      set -o pipefail
       KUBECONFIG=/etc/rancher/k3s/k3s.yaml
       for label in {{ item.1 }}; do
         kubectl --kubeconfig $KUBECONFIG \
           delete deployment,daemonset,replicaset,pod,service,\
-      serviceaccount,configmap,clusterrole,clusterrolebinding,\
-      ingressclass \
+          serviceaccount,configmap,clusterrole,clusterrolebinding,\
+          ingressclass \
           -l "$label" \
           -n kube-system \
           --ignore-not-found 2>/dev/null || true
@@ -112,6 +109,7 @@
 - name: Remove extra named resources for disabled components
   ansible.builtin.shell:
     cmd: |
+      set -o pipefail
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         delete {{ item.1 }} \
         -n kube-system \
@@ -129,9 +127,7 @@
 
 ################################################################
 # PHASE 3 — RECONCILE ENABLED COMPONENTS
-# If a component is NOT in the disable list but its pods are
-# missing, K3s needs a restart to reinstall it via its internal
-# helm controller.
+# FIX: Joins labels with commas so kubectl evaluates them as an OR query
 ################################################################
 - name: Check running pods for each known built-in component
   ansible.builtin.shell:
@@ -139,7 +135,7 @@
       set -o pipefail
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         get pods -n kube-system \
-        -l {{ item.labels | first }} \
+        -l {{ item.labels | join(',') }} \
         --no-headers 2>/dev/null | wc -l
     executable: /bin/bash
   loop: "{{ k3s_builtin_components }}"
@@ -167,9 +163,7 @@
 
 ################################################################
 # PHASE 4 — RESTART K3s IF NEEDED
-# Restarts when:
-#   - config file changed (checksum diff)
-#   - enabled components are missing (need reinstall)
+# FIX: Checks all labels dynamically and allows 0 pods for servicelb
 ################################################################
 - name: Restart K3s when config changed or components missing
   ansible.builtin.systemd:
@@ -198,7 +192,7 @@
       set -o pipefail
       kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
         get pods -n kube-system \
-        -l {{ item.labels | first }} \
+        -l {{ item.labels | join(',') }} \
         --no-headers 2>/dev/null | grep -c Running || true
     executable: /bin/bash
   loop: >-
@@ -211,7 +205,9 @@
   changed_when: false
   retries: 20
   delay: 15
-  until: k3s_component_ready.stdout | int > 0
+  until: >-
+    (k3s_component_ready.stdout | int > 0) or
+    (item.name == 'servicelb')
   when: >-
     k3s_missing_components | length > 0
 
