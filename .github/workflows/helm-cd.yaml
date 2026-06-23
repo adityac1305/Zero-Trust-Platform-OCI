@@ -1,0 +1,458 @@
+---
+name: Helm CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "helm/**"
+  workflow_dispatch:
+
+# ── PRESENCE-BASED DEPLOYMENT ─────────────────────────────────────────────────
+# Install  : create helm/platform/<component>/ folder → merge to main
+# Upgrade  : edit values.yaml OR helmrelease.yaml → merge to main
+# Uninstall: delete helm/platform/<component>/ folder → merge to main
+#
+# helm-cd.yaml reads chart_oci, version, release_name, namespace
+# from each component's helmrelease.yaml — nothing is hardcoded here.
+# To upgrade a component: only edit its helmrelease.yaml version field.
+#
+# DEPLOY ORDER (mandatory):
+#   cert-manager → envoy-gateway → vault → keycloak → oauth2-proxy
+
+jobs:
+  ##############################################################
+  # 0. DETECT CHANGES + COMPONENT PRESENCE
+  ##############################################################
+  changes:
+    name: Detect Changes and Component Presence
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+      applications: ${{ steps.filter.outputs.applications }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      any_changed: ${{ steps.filter.outputs.any_changed }}
+      has_cert_manager: ${{ steps.presence.outputs.has_cert_manager }}
+      has_envoy_gateway: ${{ steps.presence.outputs.has_envoy_gateway }}
+      has_vault: ${{ steps.presence.outputs.has_vault }}
+      has_keycloak: ${{ steps.presence.outputs.has_keycloak }}
+      has_oauth2_proxy: ${{ steps.presence.outputs.has_oauth2_proxy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect which layers changed
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "platform=true"       >> $GITHUB_OUTPUT
+            echo "applications=true"   >> $GITHUB_OUTPUT
+            echo "infrastructure=true" >> $GITHUB_OUTPUT
+            echo "any_changed=true"    >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          CHANGED=$(git diff --name-only HEAD^ HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          HAS_PLATFORM=$(echo "$CHANGED" | grep -q '^helm/platform/'      && echo true || echo false)
+          HAS_APPS=$(echo "$CHANGED"     | grep -q '^helm/applications/'  && echo true || echo false)
+          HAS_INFRA=$(echo "$CHANGED"    | grep -q '^helm/infrastructure/' && echo true || echo false)
+
+          echo "platform=$HAS_PLATFORM"    >> $GITHUB_OUTPUT
+          echo "applications=$HAS_APPS"    >> $GITHUB_OUTPUT
+          echo "infrastructure=$HAS_INFRA" >> $GITHUB_OUTPUT
+
+          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
+            echo "any_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "any_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check which platform component folders are present
+        id: presence
+        run: |
+          echo "has_cert_manager=$([ -d helm/platform/cert-manager ]  && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_envoy_gateway=$([ -d helm/platform/envoy-gateway ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_vault=$([ -d helm/platform/vault ]                 && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_keycloak=$([ -d helm/platform/keycloak ]           && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_oauth2_proxy=$([ -d helm/platform/oauth2-proxy ]   && echo true || echo false)" >> $GITHUB_OUTPUT
+
+  ##############################################################
+  # 1. SETUP KUBECONFIG
+  # FIX: Use printf instead of echo to safely write multiline YAML secret.
+  # echo "$SECRET" can mangle indentation in multiline values.
+  # printf '%s' preserves the exact bytes from the secret.
+  ##############################################################
+  setup-kubeconfig:
+    name: Setup Kubeconfig
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.any_changed == 'true'
+    steps:
+      - name: Write kubeconfig from secret
+        run: |
+          mkdir -p ~/.kube
+          # printf '%s' preserves exact YAML structure from the secret value
+          # (echo can mangle multiline strings on some shells)
+          printf '%s' "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Verify cluster connectivity
+        run: |
+          kubectl get nodes -o wide
+          echo "Cluster connection: OK"
+
+      - name: Upload kubeconfig artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube/config
+          retention-days: 1
+
+  ##############################################################
+  # 2. DEPLOY INFRASTRUCTURE
+  ##############################################################
+  deploy-infrastructure:
+    name: Deploy Infrastructure Config
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig]
+    if: |
+      needs.changes.outputs.infrastructure == 'true' &&
+      needs.setup-kubeconfig.result == 'success'
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Apply infrastructure manifests
+        run: |
+          chmod 600 ~/.kube/config
+          kubectl apply -f helm/infrastructure/gateway-config/
+
+  ##############################################################
+  # 3. DEPLOY PLATFORM COMPONENTS
+  #
+  # FIX 1: helm_deploy.sh now accepts an optional timeout argument.
+  #         Keycloak passes --timeout 8m; all others use the default 5m.
+  # FIX 2: yq download uses linux_amd64 (GitHub runners are x86_64).
+  #         Your OCI instance is ARM64 but the GitHub runner is NOT.
+  # FIX 3: Helm is installed here via the official script, not azure/setup-helm,
+  #         because setup-helm was only in deploy-platform but health-check
+  #         also needs helm. Helm installation is now scoped to each job that needs it.
+  ##############################################################
+  deploy-platform:
+    name: Deploy Platform Components
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-infrastructure]
+    if: |
+      always() &&
+      needs.changes.outputs.platform == 'true' &&
+      needs.setup-kubeconfig.result == 'success' &&
+      (needs.deploy-infrastructure.result == 'success' ||
+       needs.deploy-infrastructure.result == 'skipped')
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Install yq
+        run: |
+          # yq_linux_amd64 — GitHub Actions runners are x86_64 (NOT ARM64).
+          # Your k3s OCI instance is ARM64 but the runner that executes this
+          # workflow is GitHub's standard ubuntu-latest (x86_64).
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Add Helm repos
+        # cert-manager + envoy-gateway use OCI registries — no repo add needed
+        run: |
+          helm repo add hashicorp    https://helm.releases.hashicorp.com
+          helm repo add bitnami      https://charts.bitnami.com/bitnami
+          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
+          helm repo update
+
+      - name: Apply namespace manifests for present components
+        run: |
+          chmod 600 ~/.kube/config
+          for dir in \
+            helm/platform/cert-manager \
+            helm/platform/envoy-gateway \
+            helm/platform/vault \
+            helm/platform/keycloak \
+            helm/platform/oauth2-proxy; do
+            if [ -d "$dir" ] && [ -f "$dir/namespace.yaml" ]; then
+              echo "==> Applying namespace: $dir/namespace.yaml"
+              kubectl apply -f "$dir/namespace.yaml"
+            fi
+          done
+
+      - name: Write deploy helper script
+        run: |
+          # Usage: /tmp/helm_deploy.sh <component-dir> [--timeout Xm] [extra --set flags]
+          # Reads chart_oci, version, release_name, namespace from helmrelease.yaml.
+          # Optional --timeout argument overrides the default 5m (use 8m for keycloak).
+          cat > /tmp/helm_deploy.sh << 'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          DIR="$1"; shift
+
+          HELMRELEASE="$DIR/helmrelease.yaml"
+          VALUES="$DIR/values.yaml"
+
+          if [ ! -f "$HELMRELEASE" ]; then
+            echo "ERROR: $HELMRELEASE not found" >&2
+            exit 1
+          fi
+
+          CHART_OCI=$(yq '.chart_oci'    "$HELMRELEASE")
+          VERSION=$(yq '.version'        "$HELMRELEASE")
+          RELEASE=$(yq '.release_name'   "$HELMRELEASE")
+          NAMESPACE=$(yq '.namespace'    "$HELMRELEASE")
+
+          # Parse optional --timeout override from remaining args
+          TIMEOUT="5m"
+          EXTRA_ARGS=()
+          while [[ $# -gt 0 ]]; do
+            if [[ "$1" == "--timeout" ]]; then
+              TIMEOUT="$2"; shift 2
+            else
+              EXTRA_ARGS+=("$1"); shift
+            fi
+          done
+
+          echo "==> Deploying  : $RELEASE"
+          echo "    chart      : $CHART_OCI"
+          echo "    version    : $VERSION"
+          echo "    namespace  : $NAMESPACE"
+          echo "    timeout    : $TIMEOUT"
+
+          helm upgrade --install "$RELEASE" "$CHART_OCI" \
+            --version "$VERSION" \
+            --namespace "$NAMESPACE" \
+            --create-namespace \
+            -f "$VALUES" \
+            --atomic \
+            --timeout "$TIMEOUT" \
+            "${EXTRA_ARGS[@]}"
+
+          echo "==> $RELEASE deployed successfully"
+          SCRIPT
+          chmod +x /tmp/helm_deploy.sh
+
+      # ── 3a. cert-manager ────────────────────────────────────────────────────
+      - name: Deploy cert-manager
+        if: needs.changes.outputs.has_cert_manager == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/cert-manager \
+            --set crds.enabled=true
+          kubectl get pods -n cert-manager
+
+      - name: Uninstall cert-manager
+        if: needs.changes.outputs.has_cert_manager == 'false'
+        run: |
+          if helm status cert-manager -n cert-manager &>/dev/null; then
+            echo "==> Uninstalling cert-manager"
+            helm uninstall cert-manager -n cert-manager --wait
+            kubectl delete namespace cert-manager --ignore-not-found
+          else
+            echo "==> cert-manager not installed — nothing to remove"
+          fi
+
+      # ── 3b. envoy-gateway ───────────────────────────────────────────────────
+      - name: Deploy Envoy Gateway
+        if: needs.changes.outputs.has_envoy_gateway == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/envoy-gateway
+          kubectl get pods -n envoy-gateway-system
+
+      - name: Uninstall Envoy Gateway
+        if: needs.changes.outputs.has_envoy_gateway == 'false'
+        run: |
+          if helm status envoy-gateway -n envoy-gateway-system &>/dev/null; then
+            helm uninstall envoy-gateway -n envoy-gateway-system --wait
+            kubectl delete namespace envoy-gateway-system --ignore-not-found
+          else
+            echo "==> Envoy Gateway not installed — nothing to remove"
+          fi
+
+      # ── 3c. vault ───────────────────────────────────────────────────────────
+      - name: Deploy Vault
+        if: needs.changes.outputs.has_vault == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/vault
+          kubectl get pods -n vault
+
+      - name: Uninstall Vault
+        if: needs.changes.outputs.has_vault == 'false'
+        run: |
+          if helm status vault -n vault &>/dev/null; then
+            helm uninstall vault -n vault --wait
+            kubectl delete namespace vault --ignore-not-found
+          else
+            echo "==> Vault not installed — nothing to remove"
+          fi
+
+      # ── 3d. keycloak ────────────────────────────────────────────────────────
+      # FIX: passes --timeout 8m because Keycloak + PostgreSQL take longer to
+      # initialise than the default 5m used by all other components.
+      - name: Deploy Keycloak
+        if: needs.changes.outputs.has_keycloak == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/keycloak \
+            --timeout 8m \
+            --set auth.adminPassword="${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}" \
+            --set postgresql.auth.password="${{ secrets.KEYCLOAK_DB_PASSWORD }}"
+          kubectl get pods -n keycloak
+
+      - name: Uninstall Keycloak
+        if: needs.changes.outputs.has_keycloak == 'false'
+        run: |
+          if helm status keycloak -n keycloak &>/dev/null; then
+            helm uninstall keycloak -n keycloak --wait
+            kubectl delete namespace keycloak --ignore-not-found
+          else
+            echo "==> Keycloak not installed — nothing to remove"
+          fi
+
+      # ── 3e. oauth2-proxy ────────────────────────────────────────────────────
+      - name: Deploy oauth2-proxy
+        if: needs.changes.outputs.has_oauth2_proxy == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/oauth2-proxy \
+            --set config.clientSecret="${{ secrets.OAUTH2_PROXY_CLIENT_SECRET }}" \
+            --set config.cookieSecret="${{ secrets.OAUTH2_PROXY_COOKIE_SECRET }}"
+          kubectl get pods -n oauth2-proxy
+
+      - name: Uninstall oauth2-proxy
+        if: needs.changes.outputs.has_oauth2_proxy == 'false'
+        run: |
+          if helm status oauth2-proxy -n oauth2-proxy &>/dev/null; then
+            helm uninstall oauth2-proxy -n oauth2-proxy --wait
+            kubectl delete namespace oauth2-proxy --ignore-not-found
+          else
+            echo "==> oauth2-proxy not installed — nothing to remove"
+          fi
+
+  ##############################################################
+  # 4. DEPLOY APPLICATIONS
+  ##############################################################
+  deploy-applications:
+    name: Deploy Applications
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-platform]
+    if: |
+      always() &&
+      needs.changes.outputs.applications == 'true' &&
+      needs.setup-kubeconfig.result == 'success' &&
+      (needs.deploy-platform.result == 'success' ||
+       needs.deploy-platform.result == 'skipped')
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Deploy present applications
+        run: |
+          chmod 600 ~/.kube/config
+          shopt -s nullglob
+          for dir in helm/applications/*/; do
+            [ -d "$dir" ] || continue
+            app=$(basename "$dir")
+            echo "==> Processing application: $app"
+            for f in "$dir"namespace.yaml "$dir"httproute.yaml; do
+              [ -f "$f" ] && kubectl apply -f "$f" && echo "    applied: $f"
+            done
+          done
+
+  ##############################################################
+  # 5. HEALTH CHECK
+  # FIX: Installs helm so `helm list -A` works.
+  # Only runs when setup-kubeconfig succeeded (kubeconfig artifact exists).
+  ##############################################################
+  health-check:
+    name: Cluster Health Check
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-platform, deploy-applications]
+    if: |
+      always() &&
+      needs.setup-kubeconfig.result == 'success'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Platform and cluster status
+        run: |
+          chmod 600 ~/.kube/config
+
+          echo "════════════════════════════════════"
+          echo " NODES"
+          echo "════════════════════════════════════"
+          kubectl get nodes -o wide
+
+          echo ""
+          echo "════════════════════════════════════"
+          echo " HELM RELEASES (all namespaces)"
+          echo "════════════════════════════════════"
+          helm list -A
+
+          echo ""
+          echo "════════════════════════════════════"
+          echo " PLATFORM PODS"
+          echo "════════════════════════════════════"
+          for ns in cert-manager envoy-gateway-system vault keycloak oauth2-proxy; do
+            echo ""
+            echo "── $ns ──"
+            kubectl get pods -n "$ns" 2>/dev/null || echo "(namespace not present)"
+          done
+
+          echo ""
+          echo "════════════════════════════════════"
+          echo " CERT-MANAGER CRDs"
+          echo "════════════════════════════════════"
+          kubectl get crds 2>/dev/null | grep cert-manager.io || echo "(no cert-manager CRDs)"
+
+          echo ""
+          echo "════════════════════════════════════"
+          echo " CLUSTERISSUERS"
+          echo "════════════════════════════════════"
+          kubectl get clusterissuer -o wide 2>/dev/null || echo "(none)"
+
+          echo ""
+          echo "════════════════════════════════════"
+          echo " CERTIFICATES (all namespaces)"
+          echo "════════════════════════════════════"
+          kubectl get certificate -A 2>/dev/null || echo "(none)"

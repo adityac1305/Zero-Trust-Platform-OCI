@@ -1,0 +1,103 @@
+---
+# helm/platform/cert-manager/values.yaml
+#
+# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
+#
+# To upgrade cert-manager: change version in
+# helmrelease.yaml → merge to main.
+
+# ── CRD management ───────────────────────────────────────────────────────────
+# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
+# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
+#                Only set keep=false if you want a complete wipe including certs.
+crds:
+  enabled: true
+  keep: true
+
+# ── Replica count ────────────────────────────────────────────────────────────
+# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
+replicaCount: 1
+
+# ── Feature gates ────────────────────────────────────────────────────────────
+# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
+# HTTP-01 challenges via Gateway API HTTPRoute resources.
+# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
+featureGates: "ExperimentalGatewayAPISupport=true"
+
+# ── Controller (main cert-manager pod) ───────────────────────────────────────
+nodeSelector:
+  kubernetes.io/os: linux
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+# ── Webhook ──────────────────────────────────────────────────────────────────
+# Validates and mutates Certificate, CertificateRequest,
+# and Issuer resources.
+webhook:
+  replicaCount: 1
+  timeoutSeconds: 10
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── CA Injector ──────────────────────────────────────────────────────────────
+# Injects CA bundles into webhook configurations and CRD conversion webhooks.
+# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
+cainjector:
+  enabled: true
+  replicaCount: 1
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Startup API check ────────────────────────────────────────────────────────
+# One-shot Job that probes the cert-manager API after install/upgrade.
+# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
+# Keep enabled — if disabled, helm-cd may declare success before cert-manager
+# is actually ready to issue certificates.
+startupapicheck:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Prometheus metrics ───────────────────────────────────────────────────────
+# Disabled — no Prometheus stack installed. Enable when you add monitoring.
+prometheus:
+  enabled: false
+
+# ── Log level ────────────────────────────────────────────────────────────────
+# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
+logLevel: 2
+
+# ── Global settings ──────────────────────────────────────────────────────────
+global:
+  # leaderElection namespace must match the install namespace (cert-manager).
+  # Required even with replicaCount=1 — the controller
+  # always runs leader election.
+  leaderElection:
+    namespace: cert-manager
