@@ -1,0 +1,70 @@
+---
+# helm/platform/envoy-gateway/values.yaml
+#
+# Envoy Gateway v1.3.x — tuned for a k3s single-node ARM64 OCI instance.
+#
+# Envoy Gateway consists of two layers:
+#   1. The Gateway controller (this chart) — watches Gateway/HTTPRoute CRDs
+#      and programs the data plane. Runs in envoy-gateway-system namespace.
+#   2. The Envoy proxy data plane — spun up dynamically per Gateway resource
+#      by the controller. Also runs in envoy-gateway-system by default.
+#
+# The actual Gateway resource + GatewayClass are NOT created here.
+# They live in helm/infrastructure/gateway-config/ so they can be
+# managed independently of the controller version.
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+deployment:
+  replicas: 1
+  pod:
+    affinity: {}
+  container:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# ── Config ────────────────────────────────────────────────────────────────────
+# gateway.controllerName must match the GatewayClass controllerName in
+# helm/infrastructure/gateway-config/gatewayclass.yaml.
+# Using the standard io.envoyproxy.gateway value.
+config:
+  envoyGateway:
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    logging:
+      level:
+        default: info
+    provider:
+      type: Kubernetes
+      kubernetes:
+        # The Envoy proxy pods spun up per Gateway will also run in
+        # envoy-gateway-system. This keeps all gateway traffic components
+        # in one namespace, simplifying network policy and RBAC.
+        envoyDeployment:
+          replicas: 1
+          container:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 64Mi
+              limits:
+                cpu: 500m
+                memory: 256Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: false  # Envoy needs root to bind ports 80/443
+              capabilities:
+                add:
+                  - NET_BIND_SERVICE
+                drop:
+                  - ALL
+
+# ── CRDs ─────────────────────────────────────────────────────────────────────
+# Envoy Gateway ships its own CRDs (EnvoyProxy, EnvoyPatchPolicy etc.).
+# Keep enabled=true so Helm manages CRD upgrades.
+crds:
+  managed: true

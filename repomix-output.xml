@@ -78,6 +78,9 @@ ansible/roles/os-bootstrap/tasks/sysctl.yml
 helm/platform/cert-manager/helmrelease.yaml
 helm/platform/cert-manager/namespace.yaml
 helm/platform/cert-manager/values.yaml
+helm/platform/envoy-gateway/helmrelease.yaml
+helm/platform/envoy-gateway/namespace.yaml
+helm/platform/envoy-gateway/values.yaml
 opentofu/bootstrap/state-backend/.terraform.lock.hcl
 opentofu/bootstrap/state-backend/main.tf
 opentofu/bootstrap/state-backend/outputs.tf
@@ -103,6 +106,127 @@ repo_structure.txt
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="helm/platform/envoy-gateway/helmrelease.yaml">
+---
+# helm/platform/envoy-gateway/helmrelease.yaml
+#
+# THIS FILE IS READ BY helm-cd.yaml at deploy time.
+# To upgrade envoy-gateway: change `version` below and merge to main.
+# helm-cd.yaml reads chart_oci, version, release_name, and namespace
+# from this file automatically — no changes to helm-cd.yaml needed.
+#
+# To install  : ensure this folder exists in git → merge to main
+# To upgrade  : change version below → merge to main
+# To uninstall: delete this folder from git → merge to main
+#
+# Envoy Gateway uses an OCI chart hosted on Docker Hub.
+# No `helm repo add` is needed — OCI charts are pulled directly.
+chart_oci: "oci://docker.io/envoyproxy/gateway-helm"
+version: "v1.3.2"
+release_name: "envoy-gateway"
+namespace: "envoy-gateway-system"
+</file>
+
+<file path="helm/platform/envoy-gateway/namespace.yaml">
+---
+# helm/platform/envoy-gateway/namespace.yaml
+#
+# Applied by helm-cd.yaml BEFORE helm upgrade --install so the namespace
+# exists before Helm tries to create resources inside it.
+#
+# Pod security enforcement:
+#   enforce: privileged — Envoy Gateway's pod requires host-level network
+#                         access and NET_BIND_SERVICE to bind ports 80/443.
+#                         "baseline" blocks these; "privileged" is required.
+#                         This is a documented Envoy Gateway requirement for
+#                         the system namespace, not a workaround.
+#   warn/audit: baseline — still log any drift toward less-restricted pods
+#                          in other namespaces for observability.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: envoy-gateway
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline
+</file>
+
+<file path="helm/platform/envoy-gateway/values.yaml">
+---
+# helm/platform/envoy-gateway/values.yaml
+#
+# Envoy Gateway v1.3.x — tuned for a k3s single-node ARM64 OCI instance.
+#
+# Envoy Gateway consists of two layers:
+#   1. The Gateway controller (this chart) — watches Gateway/HTTPRoute CRDs
+#      and programs the data plane. Runs in envoy-gateway-system namespace.
+#   2. The Envoy proxy data plane — spun up dynamically per Gateway resource
+#      by the controller. Also runs in envoy-gateway-system by default.
+#
+# The actual Gateway resource + GatewayClass are NOT created here.
+# They live in helm/infrastructure/gateway-config/ so they can be
+# managed independently of the controller version.
+
+# ── Deployment ────────────────────────────────────────────────────────────────
+deployment:
+  replicas: 1
+  pod:
+    affinity: {}
+  container:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+# ── Config ────────────────────────────────────────────────────────────────────
+# gateway.controllerName must match the GatewayClass controllerName in
+# helm/infrastructure/gateway-config/gatewayclass.yaml.
+# Using the standard io.envoyproxy.gateway value.
+config:
+  envoyGateway:
+    gateway:
+      controllerName: gateway.envoyproxy.io/gatewayclass-controller
+    logging:
+      level:
+        default: info
+    provider:
+      type: Kubernetes
+      kubernetes:
+        # The Envoy proxy pods spun up per Gateway will also run in
+        # envoy-gateway-system. This keeps all gateway traffic components
+        # in one namespace, simplifying network policy and RBAC.
+        envoyDeployment:
+          replicas: 1
+          container:
+            resources:
+              requests:
+                cpu: 100m
+                memory: 64Mi
+              limits:
+                cpu: 500m
+                memory: 256Mi
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: false  # Envoy needs root to bind ports 80/443
+              capabilities:
+                add:
+                  - NET_BIND_SERVICE
+                drop:
+                  - ALL
+
+# ── CRDs ─────────────────────────────────────────────────────────────────────
+# Envoy Gateway ships its own CRDs (EnvoyProxy, EnvoyPatchPolicy etc.).
+# Keep enabled=true so Helm manages CRD upgrades.
+crds:
+  managed: true
+</file>
 
 <file path="ansible/roles/k3s/templates/config.yaml.j2">
 write-kubeconfig-mode: "0644"
@@ -540,112 +664,6 @@ collections:
       MaxRetentionSec=14day
   notify:
     - Restart journald
-</file>
-
-<file path="helm/platform/cert-manager/values.yaml">
----
-# helm/platform/cert-manager/values.yaml
-#
-# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
-#
-# To upgrade cert-manager: change version in
-# helmrelease.yaml → merge to main.
-
-# ── CRD management ───────────────────────────────────────────────────────────
-# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
-# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
-#                Only set keep=false if you want a complete wipe including certs.
-crds:
-  enabled: true
-  keep: true
-
-# ── Replica count ────────────────────────────────────────────────────────────
-# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
-replicaCount: 1
-
-# ── Feature gates ────────────────────────────────────────────────────────────
-# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
-# HTTP-01 challenges via Gateway API HTTPRoute resources.
-# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
-featureGates: "ExperimentalGatewayAPISupport=true"
-
-# ── Controller (main cert-manager pod) ───────────────────────────────────────
-nodeSelector:
-  kubernetes.io/os: linux
-
-resources:
-  requests:
-    cpu: 50m
-    memory: 64Mi
-  limits:
-    cpu: 250m
-    memory: 256Mi
-
-# ── Webhook ──────────────────────────────────────────────────────────────────
-# Validates and mutates Certificate, CertificateRequest,
-# and Issuer resources.
-webhook:
-  replicaCount: 1
-  timeoutSeconds: 10
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── CA Injector ──────────────────────────────────────────────────────────────
-# Injects CA bundles into webhook configurations and CRD conversion webhooks.
-# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
-cainjector:
-  enabled: true
-  replicaCount: 1
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Startup API check ────────────────────────────────────────────────────────
-# One-shot Job that probes the cert-manager API after install/upgrade.
-# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
-# Keep enabled — if disabled, helm-cd may declare success before cert-manager
-# is actually ready to issue certificates.
-startupapicheck:
-  enabled: true
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Prometheus metrics ───────────────────────────────────────────────────────
-# Disabled — no Prometheus stack installed. Enable when you add monitoring.
-prometheus:
-  enabled: false
-
-# ── Log level ────────────────────────────────────────────────────────────────
-# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
-#logLevel: 2
-
-# ── Global settings ──────────────────────────────────────────────────────────
-global:
-  # leaderElection namespace must match the install namespace (cert-manager).
-  # Required even with replicaCount=1 — the controller
-  # always runs leader election.
-  leaderElection:
-    namespace: cert-manager
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -1358,24 +1376,110 @@ ansible_python_interpreter: /usr/bin/python3
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
-<file path="helm/platform/cert-manager/helmrelease.yaml">
+<file path="helm/platform/cert-manager/values.yaml">
 ---
-# Adding Comment to trigger the workflow
-# helm/platform/cert-manager/helmrelease.yaml
+# helm/platform/cert-manager/values.yaml
 #
-# THIS FILE IS READ BY helm-cd.yaml at deploy time.
-# To upgrade cert-manager: change `version` below and merge to main.
-# helm-cd.yaml reads chart_oci, version, release_name, and namespace
-# from this file automatically — no changes to helm-cd.yaml needed.
+# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
 #
-# To install  : ensure this folder exists in git → merge to main
-# To upgrade  : change version below → merge to main
-# To uninstall: delete this folder from git → merge to main
+# To upgrade cert-manager: change version in
+# helmrelease.yaml → merge to main.
 
-chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
-version: "v1.20.2"
-release_name: "cert-manager"
-namespace: "cert-manager"
+# ── CRD management ───────────────────────────────────────────────────────────
+# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
+# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
+#                Only set keep=false if you want a complete wipe including certs.
+crds:
+  enabled: true
+  keep: true
+
+# ── Replica count ────────────────────────────────────────────────────────────
+# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
+replicaCount: 1
+
+# ── Feature gates ────────────────────────────────────────────────────────────
+# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
+# HTTP-01 challenges via Gateway API HTTPRoute resources.
+# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
+featureGates: "ExperimentalGatewayAPISupport=true"
+
+# ── Controller (main cert-manager pod) ───────────────────────────────────────
+nodeSelector:
+  kubernetes.io/os: linux
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+# ── Webhook ──────────────────────────────────────────────────────────────────
+# Validates and mutates Certificate, CertificateRequest,
+# and Issuer resources.
+webhook:
+  replicaCount: 1
+  timeoutSeconds: 10
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── CA Injector ──────────────────────────────────────────────────────────────
+# Injects CA bundles into webhook configurations and CRD conversion webhooks.
+# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
+cainjector:
+  enabled: true
+  replicaCount: 1
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Startup API check ────────────────────────────────────────────────────────
+# One-shot Job that probes the cert-manager API after install/upgrade.
+# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
+# Keep enabled — if disabled, helm-cd may declare success before cert-manager
+# is actually ready to issue certificates.
+startupapicheck:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Prometheus metrics ───────────────────────────────────────────────────────
+# Disabled — no Prometheus stack installed. Enable when you add monitoring.
+prometheus:
+  enabled: false
+
+# ── Log level ────────────────────────────────────────────────────────────────
+# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
+#logLevel: 2
+
+# ── Global settings ──────────────────────────────────────────────────────────
+global:
+  # leaderElection namespace must match the install namespace (cert-manager).
+  # Required even with replicaCount=1 — the controller
+  # always runs leader election.
+  leaderElection:
+    namespace: cert-manager
 </file>
 
 <file path=".github/workflows/helm-cd.yaml">
@@ -2025,6 +2129,26 @@ jobs:
       - conntrack
     state: present
     update_cache: true
+</file>
+
+<file path="helm/platform/cert-manager/helmrelease.yaml">
+---
+# Adding Comment to trigger the workflow again
+# helm/platform/cert-manager/helmrelease.yaml
+#
+# THIS FILE IS READ BY helm-cd.yaml at deploy time.
+# To upgrade cert-manager: change `version` below and merge to main.
+# helm-cd.yaml reads chart_oci, version, release_name, and namespace
+# from this file automatically — no changes to helm-cd.yaml needed.
+#
+# To install  : ensure this folder exists in git → merge to main
+# To upgrade  : change version below → merge to main
+# To uninstall: delete this folder from git → merge to main
+
+chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
+version: "v1.20.2"
+release_name: "cert-manager"
+namespace: "cert-manager"
 </file>
 
 <file path=".pre-commit-config.yaml">

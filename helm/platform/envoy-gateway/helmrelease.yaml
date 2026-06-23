@@ -1,0 +1,18 @@
+---
+# helm/platform/envoy-gateway/helmrelease.yaml
+#
+# THIS FILE IS READ BY helm-cd.yaml at deploy time.
+# To upgrade envoy-gateway: change `version` below and merge to main.
+# helm-cd.yaml reads chart_oci, version, release_name, and namespace
+# from this file automatically — no changes to helm-cd.yaml needed.
+#
+# To install  : ensure this folder exists in git → merge to main
+# To upgrade  : change version below → merge to main
+# To uninstall: delete this folder from git → merge to main
+#
+# Envoy Gateway uses an OCI chart hosted on Docker Hub.
+# No `helm repo add` is needed — OCI charts are pulled directly.
+chart_oci: "oci://docker.io/envoyproxy/gateway-helm"
+version: "v1.3.2"
+release_name: "envoy-gateway"
+namespace: "envoy-gateway-system"

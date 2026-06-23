@@ -1,0 +1,24 @@
+---
+# helm/platform/envoy-gateway/namespace.yaml
+#
+# Applied by helm-cd.yaml BEFORE helm upgrade --install so the namespace
+# exists before Helm tries to create resources inside it.
+#
+# Pod security enforcement:
+#   enforce: privileged — Envoy Gateway's pod requires host-level network
+#                         access and NET_BIND_SERVICE to bind ports 80/443.
+#                         "baseline" blocks these; "privileged" is required.
+#                         This is a documented Envoy Gateway requirement for
+#                         the system namespace, not a workaround.
+#   warn/audit: baseline — still log any drift toward less-restricted pods
+#                          in other namespaces for observability.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: envoy-gateway
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: baseline
+    pod-security.kubernetes.io/audit: baseline
