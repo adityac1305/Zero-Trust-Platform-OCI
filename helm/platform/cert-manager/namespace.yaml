@@ -1,0 +1,24 @@
+---
+# helm/platform/cert-manager/namespace.yaml
+#
+# Applied by helm-cd.yaml BEFORE the helm upgrade --install so the namespace
+# exists before Helm tries to create resources inside it.
+#
+# Pod security enforcement:
+#   enforce: baseline  — cert-manager webhook + cainjector need host network
+#                        access and capabilities that "restricted" blocks.
+#                        "baseline" is the minimum that works. This is a
+#                        documented cert-manager requirement, not a workaround.
+#   warn: restricted   — logs a warning if any pod would violate restricted,
+#                        without blocking it. Useful for drift detection.
+#   audit: restricted  — records violations in the API server audit log.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-manager
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

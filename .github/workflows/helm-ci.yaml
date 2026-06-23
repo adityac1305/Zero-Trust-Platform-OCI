@@ -1,0 +1,169 @@
+---
+name: Helm CI
+
+on:
+  pull_request:
+    paths:
+      - "helm/**"
+  workflow_dispatch:
+
+jobs:
+  ##############################################################
+  # 1. DETECT CHANGED COMPONENTS
+  ##############################################################
+  changes:
+    name: Detect Changed Helm Components
+    runs-on: ubuntu-latest
+    outputs:
+      platform:       ${{ steps.filter.outputs.platform }}
+      applications:   ${{ steps.filter.outputs.applications }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      any_helm:       ${{ steps.filter.outputs.any_helm }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed layers
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          HAS_PLATFORM=$(echo "$CHANGED"      | grep -q '^helm/platform/'      && echo true || echo false)
+          HAS_APPS=$(echo "$CHANGED"          | grep -q '^helm/applications/'  && echo true || echo false)
+          HAS_INFRA=$(echo "$CHANGED"         | grep -q '^helm/infrastructure/' && echo true || echo false)
+
+          echo "platform=$HAS_PLATFORM"       >> $GITHUB_OUTPUT
+          echo "applications=$HAS_APPS"       >> $GITHUB_OUTPUT
+          echo "infrastructure=$HAS_INFRA"    >> $GITHUB_OUTPUT
+
+          # any_helm gates the validate + security jobs so they only run
+          # when there are actual helm file changes — not on every PR.
+          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
+            echo "any_helm=true" >> $GITHUB_OUTPUT
+          else
+            echo "any_helm=false" >> $GITHUB_OUTPUT
+          fi
+
+  ##############################################################
+  # 2. LINT
+  # Skips components that have no Chart.yaml (values-only folders like
+  # cert-manager, envoy-gateway, vault — these are not local Helm charts,
+  # they are upstream charts with local values files only).
+  ##############################################################
+  lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    needs: changes
+    if: |
+      needs.changes.outputs.platform == 'true' ||
+      needs.changes.outputs.applications == 'true' ||
+      needs.changes.outputs.infrastructure == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Add Helm repos
+        # cert-manager + envoy-gateway use OCI — no repo add needed for them
+        run: |
+          helm repo add hashicorp    https://helm.releases.hashicorp.com
+          helm repo add bitnami      https://charts.bitnami.com/bitnami
+          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
+          helm repo update
+
+      - name: Lint platform charts
+        if: needs.changes.outputs.platform == 'true'
+        run: |
+          for dir in helm/platform/*/; do
+            [ -d "$dir" ] || continue
+            if [ -f "$dir/Chart.yaml" ]; then
+              echo "==> Linting $dir"
+              helm lint "$dir" --strict
+            elif [ -f "$dir/values.yaml" ]; then
+              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
+            fi
+          done
+
+      - name: Lint application charts
+        if: needs.changes.outputs.applications == 'true'
+        run: |
+          for dir in helm/applications/*/; do
+            [ -d "$dir" ] || continue
+            if [ -f "$dir/Chart.yaml" ]; then
+              echo "==> Linting $dir"
+              helm lint "$dir" --strict
+            elif [ -f "$dir/values.yaml" ]; then
+              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
+            fi
+          done
+
+  ##############################################################
+  # 3. MANIFEST VALIDATION
+  # Only runs when helm files actually changed (any_helm gate).
+  # Validates namespace.yaml, httproute.yaml, gateway.yaml etc. against:
+  #   - Kubernetes built-in schemas (k8s 1.33)
+  #   - CRD schemas from datreeio catalog (Gateway API, cert-manager)
+  # Excludes:
+  #   values.yaml      — not a Kubernetes manifest
+  #   helmrelease.yaml — reference documentation, not a Kubernetes manifest
+  ##############################################################
+  validate:
+    name: Manifest Validation
+    runs-on: ubuntu-latest
+    needs: [changes, lint]
+    if: needs.changes.outputs.any_helm == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: Validate Kubernetes manifests
+        run: |
+          # Collect files to validate — exclude non-manifest yaml files
+          FILES=$(find helm/ -name "*.yaml" \
+            ! -name "values.yaml" \
+            ! -name "helmrelease.yaml")
+
+          if [ -z "$FILES" ]; then
+            echo "No Kubernetes manifest files found to validate."
+            exit 0
+          fi
+
+          echo "$FILES" | xargs kubeconform \
+            -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -schema-location \
+              'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -ignore-missing-schemas \
+            -summary \
+            -verbose
+
+  ##############################################################
+  # 4. SECURITY SCAN
+  # Only runs when helm files actually changed (any_helm gate).
+  ##############################################################
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [changes, validate]
+    if: needs.changes.outputs.any_helm == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: helm/
+          severity: HIGH,CRITICAL
+          exit-code: "1"
