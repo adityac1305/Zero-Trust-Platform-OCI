@@ -22,7 +22,7 @@ jobs:
       - name: Run yamllint
         run: |
           yamllint \
-            -d '{extends: default, rules: {truthy: disable, line-length: {max:300}}}' \
+            -d '{extends: default, rules: {truthy: disable, line-length: {max: 300}}}' \
             .
 
   gitleaks:
