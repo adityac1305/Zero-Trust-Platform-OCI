@@ -1,5 +1,5 @@
 ---
-# Adding Comment to trigger the workflow
+# Adding Comment to trigger the workflow again
 # helm/platform/cert-manager/helmrelease.yaml
 #
 # THIS FILE IS READ BY helm-cd.yaml at deploy time.
