@@ -29,15 +29,15 @@ jobs:
     name: Detect Changes and Component Presence
     runs-on: ubuntu-latest
     outputs:
-      platform:          ${{ steps.filter.outputs.platform }}
-      applications:      ${{ steps.filter.outputs.applications }}
-      infrastructure:    ${{ steps.filter.outputs.infrastructure }}
-      any_changed:       ${{ steps.filter.outputs.any_changed }}
-      has_cert_manager:  ${{ steps.presence.outputs.has_cert_manager }}
+      platform: ${{ steps.filter.outputs.platform }}
+      applications: ${{ steps.filter.outputs.applications }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      any_changed: ${{ steps.filter.outputs.any_changed }}
+      has_cert_manager: ${{ steps.presence.outputs.has_cert_manager }}
       has_envoy_gateway: ${{ steps.presence.outputs.has_envoy_gateway }}
-      has_vault:         ${{ steps.presence.outputs.has_vault }}
-      has_keycloak:      ${{ steps.presence.outputs.has_keycloak }}
-      has_oauth2_proxy:  ${{ steps.presence.outputs.has_oauth2_proxy }}
+      has_vault: ${{ steps.presence.outputs.has_vault }}
+      has_keycloak: ${{ steps.presence.outputs.has_keycloak }}
+      has_oauth2_proxy: ${{ steps.presence.outputs.has_oauth2_proxy }}
     steps:
       - uses: actions/checkout@v4
         with:
