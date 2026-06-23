@@ -15,8 +15,8 @@ jobs:
     name: Detect Changed Helm Components
     runs-on: ubuntu-latest
     outputs:
-      platform:       ${{ steps.filter.outputs.platform }}
-      applications:   ${{ steps.filter.outputs.applications }}
+      platform: ${{ steps.filter.outputs.platform }}
+      applications: ${{ steps.filter.outputs.applications }}
       infrastructure: ${{ steps.filter.outputs.infrastructure }}
       any_helm:       ${{ steps.filter.outputs.any_helm }}
     steps:
@@ -31,7 +31,9 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED"
 
-          HAS_PLATFORM=$(echo "$CHANGED"      | grep -q '^helm/platform/'      && echo true || echo false)
+          HAS_PLATFORM=$(echo "$CHANGED" \
+          | grep -q '^helm/platform/' \
+          && echo true || echo false)
           HAS_APPS=$(echo "$CHANGED"          | grep -q '^helm/applications/'  && echo true || echo false)
           HAS_INFRA=$(echo "$CHANGED"         | grep -q '^helm/infrastructure/' && echo true || echo false)
 

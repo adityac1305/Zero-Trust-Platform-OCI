@@ -1,9 +1,10 @@
+---
 # helm/platform/cert-manager/values.yaml
 #
 # cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
 #
-# To upgrade cert-manager: change version in helmrelease.yaml → merge to main.
-# To change any setting here: edit + commit + merge to main → helm-cd upgrades.
+# To upgrade cert-manager: change version in
+# helmrelease.yaml → merge to main.
 
 # ── CRD management ───────────────────────────────────────────────────────────
 # enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
@@ -36,7 +37,8 @@ resources:
     memory: 256Mi
 
 # ── Webhook ──────────────────────────────────────────────────────────────────
-# Validates and mutates Certificate, CertificateRequest, and Issuer resources.
+# Validates and mutates Certificate, CertificateRequest,
+# and Issuer resources.
 webhook:
   replicaCount: 1
   timeoutSeconds: 10
@@ -95,6 +97,7 @@ logLevel: 2
 # ── Global settings ──────────────────────────────────────────────────────────
 global:
   # leaderElection namespace must match the install namespace (cert-manager).
-  # Required even with replicaCount=1 — the controller always runs leader election.
+  # Required even with replicaCount=1 — the controller
+  # always runs leader election.
   leaderElection:
     namespace: cert-manager
