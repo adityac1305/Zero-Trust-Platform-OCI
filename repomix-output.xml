@@ -442,6 +442,319 @@ echo ""
 echo "Infrastructure applied successfully."
 </file>
 
+<file path="ansible/ansible.cfg">
+[defaults]
+inventory = inventories/lab/hosts.ini
+roles_path = roles
+host_key_checking = True
+retry_files_enabled = False
+interpreter_python = auto_silent
+
+[privilege_escalation]
+become = True
+become_method = sudo
+</file>
+
+<file path="ansible/inventories/lab/hosts.ini">
+[k3s]
+141.148.11.46 ansible_user=ubuntu
+</file>
+
+<file path="ansible/playbooks/k3s-config-rollout.yml">
+---
+
+- name: K3s Config Rollout
+  hosts: k3s
+  become: true
+
+  vars:
+    k3s_config_only: true
+
+  roles:
+    - k3s
+</file>
+
+<file path="ansible/requirements.yml">
+---
+collections:
+  - name: community.general
+  - name: ansible.posix
+</file>
+
+<file path="ansible/roles/k3s/handlers/main.yaml">
+---
+- name: Restart K3s (safe)
+  ansible.builtin.systemd:
+    name: k3s
+    state: restarted
+    daemon_reload: true
+  listen: Restart K3s
+
+- name: Restart journald
+  ansible.builtin.systemd:
+    name: systemd-journald
+    state: restarted
+</file>
+
+<file path="ansible/roles/k3s/tasks/cleanup.yaml">
+# ansible/roles/k3s/tasks/cleanup.yaml
+---
+- name: Install K3s image cleanup cron
+  ansible.builtin.cron:
+    name: "K3s image cleanup"
+    minute: "0"
+    hour: "3"
+    job: >-
+      /usr/bin/crictl rmi --prune >> /var/log/k3s-cleanup.log 2>&1;
+      journalctl --vacuum-time=14d >> /var/log/k3s-cleanup.log 2>&1
+
+- name: Install containerd cache cleanup cron
+  ansible.builtin.cron:
+    name: "Containerd cache cleanup"
+    minute: "30"
+    hour: "3"
+    job: >-
+      find /data/platform/kubernetes/k3s/agent/containerd
+      -name '*.tmp' -mtime +1 -delete >> /var/log/k3s-cleanup.log 2>&1
+</file>
+
+<file path="ansible/roles/k3s/tasks/logging.yaml">
+---
+- name: Ensure journald config directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure journald retention
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/k3s.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Journal]
+      SystemMaxUse=2G
+      MaxRetentionSec=14day
+  notify:
+    - Restart journald
+</file>
+
+<file path="helm/platform/cert-manager/helmrelease.yaml">
+---
+# helm/platform/cert-manager/helmrelease.yaml
+#
+# THIS FILE IS READ BY helm-cd.yaml at deploy time.
+# To upgrade cert-manager: change `version` below and merge to main.
+# helm-cd.yaml reads chart_oci, version, release_name, and namespace
+# from this file automatically — no changes to helm-cd.yaml needed.
+#
+# To install  : ensure this folder exists in git → merge to main
+# To upgrade  : change version below → merge to main
+# To uninstall: delete this folder from git → merge to main
+
+chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
+version: "v1.20.2"
+release_name: "cert-manager"
+namespace: "cert-manager"
+</file>
+
+<file path="helm/platform/cert-manager/values.yaml">
+---
+# helm/platform/cert-manager/values.yaml
+#
+# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
+#
+# To upgrade cert-manager: change version in
+# helmrelease.yaml → merge to main.
+
+# ── CRD management ───────────────────────────────────────────────────────────
+# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
+# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
+#                Only set keep=false if you want a complete wipe including certs.
+crds:
+  enabled: true
+  keep: true
+
+# ── Replica count ────────────────────────────────────────────────────────────
+# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
+replicaCount: 1
+
+# ── Feature gates ────────────────────────────────────────────────────────────
+# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
+# HTTP-01 challenges via Gateway API HTTPRoute resources.
+# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
+featureGates: "ExperimentalGatewayAPISupport=true"
+
+# ── Controller (main cert-manager pod) ───────────────────────────────────────
+nodeSelector:
+  kubernetes.io/os: linux
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+# ── Webhook ──────────────────────────────────────────────────────────────────
+# Validates and mutates Certificate, CertificateRequest,
+# and Issuer resources.
+webhook:
+  replicaCount: 1
+  timeoutSeconds: 10
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── CA Injector ──────────────────────────────────────────────────────────────
+# Injects CA bundles into webhook configurations and CRD conversion webhooks.
+# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
+cainjector:
+  enabled: true
+  replicaCount: 1
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Startup API check ────────────────────────────────────────────────────────
+# One-shot Job that probes the cert-manager API after install/upgrade.
+# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
+# Keep enabled — if disabled, helm-cd may declare success before cert-manager
+# is actually ready to issue certificates.
+startupapicheck:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Prometheus metrics ───────────────────────────────────────────────────────
+# Disabled — no Prometheus stack installed. Enable when you add monitoring.
+prometheus:
+  enabled: false
+
+# ── Log level ────────────────────────────────────────────────────────────────
+# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
+logLevel: 2
+
+# ── Global settings ──────────────────────────────────────────────────────────
+global:
+  # leaderElection namespace must match the install namespace (cert-manager).
+  # Required even with replicaCount=1 — the controller
+  # always runs leader election.
+  leaderElection:
+    namespace: cert-manager
+</file>
+
+<file path="opentofu/bootstrap/state-backend/main.tf">
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    oci = {
+      source  = "oracle/oci"
+      version = ">= 5.0.0"
+    }
+  }
+}
+
+provider "oci" {
+  tenancy_ocid     = var.tenancy_ocid
+  user_ocid        = var.user_ocid
+  fingerprint      = var.fingerprint
+  private_key_path = var.private_key_path
+  region           = var.region
+}
+
+#################################################
+# OBJECT STORAGE NAMESPACE
+#################################################
+
+data "oci_objectstorage_namespace" "ns" {
+  compartment_id = var.tenancy_ocid
+}
+
+#################################################
+# STATE BUCKET
+#################################################
+
+resource "oci_objectstorage_bucket" "tofu_state" {
+  compartment_id = var.compartment_ocid
+  namespace      = data.oci_objectstorage_namespace.ns.namespace
+
+  name = var.bucket_name
+
+  access_type = "NoPublicAccess"
+
+  storage_tier = "Standard"
+
+  versioning = "Enabled"
+}
+</file>
+
+<file path="opentofu/environments/lab/backend.tf">
+terraform {
+  backend "s3" {
+    bucket = "tofu-state"
+    key    = "lab/terraform.tfstate"
+    region = "us-ashburn-1"
+
+    endpoint = "https://id0furdqqyma.compat.objectstorage.us-ashburn-1.oraclecloud.com"
+
+    skip_region_validation      = true
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    force_path_style            = true
+  }
+}
+</file>
+
+<file path="opentofu/scripts/init.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu init
+</file>
+
+<file path="opentofu/scripts/plan.sh">
+#!/usr/bin/env bash
+
+# test workflows
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu plan -out="${ENVIRONMENT}.tfplan"
+</file>
+
 <file path=".github/workflows/helm-cd.yaml">
 ---
 name: Helm CD
@@ -451,6 +764,7 @@ on:
       - main
     paths:
       - "helm/**"
+      - ".github/workflows/helm-cd.yaml"
   workflow_dispatch:
 # ── PRESENCE-BASED DEPLOYMENT ─────────────────────────────────────────────────
 # Install  : create helm/platform/<component>/ folder → merge to main
@@ -1060,319 +1374,6 @@ jobs:
           echo " CERTIFICATES (all namespaces)"
           echo "════════════════════════════════════"
           kubectl get certificate -A 2>/dev/null || echo "(none)"
-</file>
-
-<file path="ansible/ansible.cfg">
-[defaults]
-inventory = inventories/lab/hosts.ini
-roles_path = roles
-host_key_checking = True
-retry_files_enabled = False
-interpreter_python = auto_silent
-
-[privilege_escalation]
-become = True
-become_method = sudo
-</file>
-
-<file path="ansible/inventories/lab/hosts.ini">
-[k3s]
-141.148.11.46 ansible_user=ubuntu
-</file>
-
-<file path="ansible/playbooks/k3s-config-rollout.yml">
----
-
-- name: K3s Config Rollout
-  hosts: k3s
-  become: true
-
-  vars:
-    k3s_config_only: true
-
-  roles:
-    - k3s
-</file>
-
-<file path="ansible/requirements.yml">
----
-collections:
-  - name: community.general
-  - name: ansible.posix
-</file>
-
-<file path="ansible/roles/k3s/handlers/main.yaml">
----
-- name: Restart K3s (safe)
-  ansible.builtin.systemd:
-    name: k3s
-    state: restarted
-    daemon_reload: true
-  listen: Restart K3s
-
-- name: Restart journald
-  ansible.builtin.systemd:
-    name: systemd-journald
-    state: restarted
-</file>
-
-<file path="ansible/roles/k3s/tasks/cleanup.yaml">
-# ansible/roles/k3s/tasks/cleanup.yaml
----
-- name: Install K3s image cleanup cron
-  ansible.builtin.cron:
-    name: "K3s image cleanup"
-    minute: "0"
-    hour: "3"
-    job: >-
-      /usr/bin/crictl rmi --prune >> /var/log/k3s-cleanup.log 2>&1;
-      journalctl --vacuum-time=14d >> /var/log/k3s-cleanup.log 2>&1
-
-- name: Install containerd cache cleanup cron
-  ansible.builtin.cron:
-    name: "Containerd cache cleanup"
-    minute: "30"
-    hour: "3"
-    job: >-
-      find /data/platform/kubernetes/k3s/agent/containerd
-      -name '*.tmp' -mtime +1 -delete >> /var/log/k3s-cleanup.log 2>&1
-</file>
-
-<file path="ansible/roles/k3s/tasks/logging.yaml">
----
-- name: Ensure journald config directory exists
-  ansible.builtin.file:
-    path: /etc/systemd/journald.conf.d
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-- name: Configure journald retention
-  ansible.builtin.copy:
-    dest: /etc/systemd/journald.conf.d/k3s.conf
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      [Journal]
-      SystemMaxUse=2G
-      MaxRetentionSec=14day
-  notify:
-    - Restart journald
-</file>
-
-<file path="helm/platform/cert-manager/helmrelease.yaml">
----
-# helm/platform/cert-manager/helmrelease.yaml
-#
-# THIS FILE IS READ BY helm-cd.yaml at deploy time.
-# To upgrade cert-manager: change `version` below and merge to main.
-# helm-cd.yaml reads chart_oci, version, release_name, and namespace
-# from this file automatically — no changes to helm-cd.yaml needed.
-#
-# To install  : ensure this folder exists in git → merge to main
-# To upgrade  : change version below → merge to main
-# To uninstall: delete this folder from git → merge to main
-
-chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
-version: "v1.20.2"
-release_name: "cert-manager"
-namespace: "cert-manager"
-</file>
-
-<file path="helm/platform/cert-manager/values.yaml">
----
-# helm/platform/cert-manager/values.yaml
-#
-# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
-#
-# To upgrade cert-manager: change version in
-# helmrelease.yaml → merge to main.
-
-# ── CRD management ───────────────────────────────────────────────────────────
-# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
-# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
-#                Only set keep=false if you want a complete wipe including certs.
-crds:
-  enabled: true
-  keep: true
-
-# ── Replica count ────────────────────────────────────────────────────────────
-# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
-replicaCount: 1
-
-# ── Feature gates ────────────────────────────────────────────────────────────
-# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
-# HTTP-01 challenges via Gateway API HTTPRoute resources.
-# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
-featureGates: "ExperimentalGatewayAPISupport=true"
-
-# ── Controller (main cert-manager pod) ───────────────────────────────────────
-nodeSelector:
-  kubernetes.io/os: linux
-
-resources:
-  requests:
-    cpu: 50m
-    memory: 64Mi
-  limits:
-    cpu: 250m
-    memory: 256Mi
-
-# ── Webhook ──────────────────────────────────────────────────────────────────
-# Validates and mutates Certificate, CertificateRequest,
-# and Issuer resources.
-webhook:
-  replicaCount: 1
-  timeoutSeconds: 10
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── CA Injector ──────────────────────────────────────────────────────────────
-# Injects CA bundles into webhook configurations and CRD conversion webhooks.
-# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
-cainjector:
-  enabled: true
-  replicaCount: 1
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Startup API check ────────────────────────────────────────────────────────
-# One-shot Job that probes the cert-manager API after install/upgrade.
-# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
-# Keep enabled — if disabled, helm-cd may declare success before cert-manager
-# is actually ready to issue certificates.
-startupapicheck:
-  enabled: true
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Prometheus metrics ───────────────────────────────────────────────────────
-# Disabled — no Prometheus stack installed. Enable when you add monitoring.
-prometheus:
-  enabled: false
-
-# ── Log level ────────────────────────────────────────────────────────────────
-# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
-logLevel: 2
-
-# ── Global settings ──────────────────────────────────────────────────────────
-global:
-  # leaderElection namespace must match the install namespace (cert-manager).
-  # Required even with replicaCount=1 — the controller
-  # always runs leader election.
-  leaderElection:
-    namespace: cert-manager
-</file>
-
-<file path="opentofu/bootstrap/state-backend/main.tf">
-terraform {
-  required_version = ">= 1.6.0"
-
-  required_providers {
-    oci = {
-      source  = "oracle/oci"
-      version = ">= 5.0.0"
-    }
-  }
-}
-
-provider "oci" {
-  tenancy_ocid     = var.tenancy_ocid
-  user_ocid        = var.user_ocid
-  fingerprint      = var.fingerprint
-  private_key_path = var.private_key_path
-  region           = var.region
-}
-
-#################################################
-# OBJECT STORAGE NAMESPACE
-#################################################
-
-data "oci_objectstorage_namespace" "ns" {
-  compartment_id = var.tenancy_ocid
-}
-
-#################################################
-# STATE BUCKET
-#################################################
-
-resource "oci_objectstorage_bucket" "tofu_state" {
-  compartment_id = var.compartment_ocid
-  namespace      = data.oci_objectstorage_namespace.ns.namespace
-
-  name = var.bucket_name
-
-  access_type = "NoPublicAccess"
-
-  storage_tier = "Standard"
-
-  versioning = "Enabled"
-}
-</file>
-
-<file path="opentofu/environments/lab/backend.tf">
-terraform {
-  backend "s3" {
-    bucket = "tofu-state"
-    key    = "lab/terraform.tfstate"
-    region = "us-ashburn-1"
-
-    endpoint = "https://id0furdqqyma.compat.objectstorage.us-ashburn-1.oraclecloud.com"
-
-    skip_region_validation      = true
-    skip_credentials_validation = true
-    skip_metadata_api_check     = true
-    force_path_style            = true
-  }
-}
-</file>
-
-<file path="opentofu/scripts/init.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "opentofu/environments/${ENVIRONMENT}"
-
-tofu init
-</file>
-
-<file path="opentofu/scripts/plan.sh">
-#!/usr/bin/env bash
-
-# test workflows
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "opentofu/environments/${ENVIRONMENT}"
-
-tofu plan -out="${ENVIRONMENT}.tfplan"
 </file>
 
 <file path=".github/workflows/helm-ci.yaml">

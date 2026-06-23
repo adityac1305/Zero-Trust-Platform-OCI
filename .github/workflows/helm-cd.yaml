@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "helm/**"
+      - ".github/workflows/helm-cd.yaml"
   workflow_dispatch:
 # ── PRESENCE-BASED DEPLOYMENT ─────────────────────────────────────────────────
 # Install  : create helm/platform/<component>/ folder → merge to main
