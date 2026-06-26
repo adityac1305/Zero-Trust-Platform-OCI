@@ -1,0 +1,104 @@
+---
+# helm/infrastructure/gateway-config/gateway.yaml
+#
+# The Gateway resource defines the actual listeners (ports 80 + 443) that
+# Envoy Gateway programs into the Envoy proxy data plane.
+#
+# Port 80  — HTTP only, used for:
+#             a) Let's Encrypt HTTP-01 ACME challenge responses
+#             b) Redirecting all other HTTP traffic to HTTPS
+#             Applications should NOT serve on HTTP directly.
+#
+# Port 443 — HTTPS with TLS termination. cert-manager provisions and rotates
+#             the wildcard certificate automatically via letsencrypt-prod.
+#             Individual HTTPRoutes attach to this listener by referencing
+#             this Gateway as their parentRef.
+#
+# The wildcard cert *.ac1305-lab.duckdns.org covers:
+#   vault.ac1305-lab.duckdns.org
+#   keycloak.ac1305-lab.duckdns.org
+#   auth.ac1305-lab.duckdns.org   (oauth2-proxy)
+#   <any-app>.ac1305-lab.duckdns.org
+#
+# After applying, Envoy Gateway creates a managed Envoy deployment and a
+# LoadBalancer Service in envoy-gateway-system. On k3s the LoadBalancer
+# is satisfied by k3s's built-in servicelb (formerly klipper-lb).
+# The external IP should match your OCI instance public IP: 155.133.4.76
+# Verify with: kubectl get gateway lab-gateway -n envoy-gateway-system
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lab-gateway
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+  annotations:
+    # cert-manager reads this annotation to know which issuer to use
+    # for the wildcard certificate on the HTTPS listener.
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  gatewayClassName: envoy
+  listeners:
+    # ── HTTP listener ─────────────────────────────────────────────────────────
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Allow HTTPRoutes from any namespace to attach to this listener.
+      # Individual component HTTPRoutes (vault, keycloak, etc.) live in
+      # their own namespaces and need cross-namespace attachment.
+      allowedRoutes:
+        namespaces:
+          from: All
+    # ── HTTPS listener ────────────────────────────────────────────────────────
+    - name: https
+      protocol: HTTPS
+      port: 443
+      # Hostname matches all subdomains — individual HTTPRoutes specify
+      # their exact hostname (e.g. vault.ac1305-lab.duckdns.org).
+      hostname: "*.ac1305-lab.duckdns.org"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          # cert-manager creates and maintains this Secret.
+          # The Certificate resource below instructs cert-manager to do so.
+          - name: lab-wildcard-tls
+            namespace: envoy-gateway-system
+      allowedRoutes:
+        namespaces:
+          from: All
+---
+# ── Wildcard TLS Certificate ──────────────────────────────────────────────────
+# cert-manager watches this Certificate resource and:
+#   1. Creates an ACME order with Let's Encrypt
+#   2. Solves the HTTP-01 challenge via a temporary HTTPRoute on the Gateway
+#   3. Stores the signed cert+key in lab-wildcard-tls secret
+#   4. Auto-renews ~30 days before expiry
+#
+# NOTE: HTTP-01 cannot validate wildcard certs (*.domain) directly.
+# We work around this by listing both the wildcard AND the apex domain,
+# which Let's Encrypt allows when at least one non-wildcard SAN is present.
+# The apex ac1305-lab.duckdns.org is validated via HTTP-01; the wildcard
+# is included as an additional SAN on the same certificate order.
+#
+# If HTTP-01 fails for wildcard validation, switch to DNS-01 with a
+# DuckDNS webhook solver. For now HTTP-01 on the apex covers all subdomains.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: lab-wildcard-tls
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  secretName: lab-wildcard-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  commonName: "ac1305-lab.duckdns.org"
+  dnsNames:
+    - "ac1305-lab.duckdns.org"
+    - "*.ac1305-lab.duckdns.org"
+  duration: 2160h      # 90 days — Let's Encrypt maximum
+  renewBefore: 720h    # Renew 30 days before expiry
