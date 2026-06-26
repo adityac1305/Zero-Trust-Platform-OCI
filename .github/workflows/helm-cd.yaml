@@ -152,6 +152,11 @@ jobs:
   ##############################################################
   # 2. DEPLOY INFRASTRUCTURE
   # Opens its own SSH tunnel — tunnels do not persist across jobs.
+  #
+  # PRUNING: kubectl apply --prune -l app.kubernetes.io/part-of=gateway-config
+  # ensures that when a file is removed from helm/infrastructure/gateway-config,
+  # the corresponding resource is deleted from the cluster.
+  # All resources in gateway-config/ must carry this label for pruning to work
   ##############################################################
   deploy-infrastructure:
     name: Deploy Infrastructure Config
@@ -207,7 +212,12 @@ jobs:
       - name: Apply infrastructure manifests
         run: |
           chmod 600 ~/.kube/config
-          kubectl apply -f helm/infrastructure/gateway-config/
+          # --prune removes cluster resources whose source files have been deleted
+          # The label selector scopes pruning to only gateway-config resources,
+          # preventing accidental deletion of unrelated cluster resources.
+          kubectl apply -f helm/infrastructure/gateway-config/ \
+            --prune \
+            -l app.kubernetes.io/part-of=gateway-config
 
   ##############################################################
   # 3. DEPLOY PLATFORM COMPONENTS
@@ -601,6 +611,12 @@ jobs:
             echo "── $ns ──"
             kubectl get pods -n "$ns" 2>/dev/null || echo "(namespace not present)"
           done
+          echo ""
+          echo "════════════════════════════════════"
+          echo " GATEWAY STATUS"
+          echo "════════════════════════════════════"
+          kubectl get gatewayclass 2>/dev/null || echo "(no gatewayclasses)"
+          kubectl get gateway -A 2>/dev/null || echo "(no gateways)"
           echo ""
           echo "════════════════════════════════════"
           echo " CERT-MANAGER CRDs"
