@@ -1,0 +1,48 @@
+---
+# helm/infrastructure/gateway-config/gateway.yaml
+#
+# The Gateway resource defines the actual listeners (ports 80 + 443) that
+# Envoy Gateway programs into the Envoy proxy data plane.
+#
+# Port 80  — HTTP only, used for:
+#             a) Let's Encrypt HTTP-01 ACME challenge responses
+#             b) Redirecting all other HTTP traffic to HTTPS
+#             Applications should NOT serve on HTTP directly.
+#
+# Port 443 — HTTPS with TLS termination. cert-manager provisions and rotates
+#             the wildcard certificate automatically via letsencrypt-prod.
+#             Individual HTTPRoutes attach to this listener by referencing
+#             this Gateway as their parentRef.
+#
+# The wildcard cert *.ac1305-lab.duckdns.org covers:
+#   vault.ac1305-lab.duckdns.org
+#   keycloak.ac1305-lab.duckdns.org
+#   auth.ac1305-lab.duckdns.org   (oauth2-proxy)
+#   <any-app>.ac1305-lab.duckdns.org
+#
+# After applying, Envoy Gateway creates a managed Envoy deployment and a
+# LoadBalancer Service in envoy-gateway-system. On k3s the LoadBalancer
+# is satisfied by k3s's built-in servicelb (formerly klipper-lb).
+# The external IP should match your OCI instance public IP: 155.133.4.76
+# Verify with: kubectl get gateway lab-gateway -n envoy-gateway-system
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lab-gateway
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  gatewayClassName: envoy
+  listeners:
+    # ── HTTP listener ─────────────────────────────────────────────────────────
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Allow HTTPRoutes from any namespace to attach to this listener.
+      # Individual component HTTPRoutes (vault, keycloak, etc.) live in
+      # their own namespaces and need cross-namespace attachment.
+      allowedRoutes:
+        namespaces:
+          from: All

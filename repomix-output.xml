@@ -75,6 +75,8 @@ ansible/roles/os-bootstrap/tasks/main.yml
 ansible/roles/os-bootstrap/tasks/packages.yml
 ansible/roles/os-bootstrap/tasks/ssh.yml
 ansible/roles/os-bootstrap/tasks/sysctl.yml
+helm/infrastructure/gateway-config/gateway.yaml
+helm/infrastructure/gateway-config/gatewayclass.yaml
 helm/platform/cert-manager/helmrelease.yaml
 helm/platform/cert-manager/namespace.yaml
 helm/platform/cert-manager/values.yaml
@@ -106,6 +108,78 @@ repo_structure.txt
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="ansible/roles/k3s/templates/config.yaml.j2">
+write-kubeconfig-mode: "0644"
+
+tls-san:
+  - "{{ ansible_host }}"
+
+data-dir: "{{ k3s_config.data_dir }}"
+
+disable:
+{% for item in k3s_config.disable %}
+  - {{ item }}
+{% endfor %}
+
+kube-apiserver-arg:
+  - event-ttl={{ k3s_config.kube_apiserver.event_ttl }}
+
+kubelet-arg:
+  - max-pods={{ k3s_config.kubelet.max_pods }}
+  - container-log-max-size={{ k3s_config.kubelet.container_log_max_size }}
+  - container-log-max-files={{ k3s_config.kubelet.container_log_max_files }}
+</file>
+
+<file path="helm/infrastructure/gateway-config/gatewayclass.yaml">
+---
+# helm/infrastructure/gateway-config/gatewayclass.yaml
+#
+# GatewayClass tells Envoy Gateway that it is responsible for managing
+# any Gateway resource that references this class.
+#
+# controllerName MUST match config.envoyGateway.gateway.controllerName
+# in helm/platform/envoy-gateway/values.yaml exactly.
+#
+# This is a cluster-scoped resource — no namespace needed.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  description: "Envoy Gateway — manages ingress for ac1305-lab"
+</file>
+
+<file path="helm/platform/cert-manager/namespace.yaml">
+---
+# helm/platform/cert-manager/namespace.yaml
+#
+# Applied by helm-cd.yaml BEFORE the helm upgrade --install so the namespace
+# exists before Helm tries to create resources inside it.
+#
+# Pod security enforcement:
+#   enforce: baseline  — cert-manager webhook + cainjector need host network
+#                        access and capabilities that "restricted" blocks.
+#                        "baseline" is the minimum that works. This is a
+#                        documented cert-manager requirement, not a workaround.
+#   warn: restricted   — logs a warning if any pod would violate restricted,
+#                        without blocking it. Useful for drift detection.
+#   audit: restricted  — records violations in the API server audit log.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-manager
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+</file>
 
 <file path="helm/platform/envoy-gateway/helmrelease.yaml">
 ---
@@ -226,55 +300,6 @@ config:
 # Keep enabled=true so Helm manages CRD upgrades.
 crds:
   managed: true
-</file>
-
-<file path="ansible/roles/k3s/templates/config.yaml.j2">
-write-kubeconfig-mode: "0644"
-
-tls-san:
-  - "{{ ansible_host }}"
-
-data-dir: "{{ k3s_config.data_dir }}"
-
-disable:
-{% for item in k3s_config.disable %}
-  - {{ item }}
-{% endfor %}
-
-kube-apiserver-arg:
-  - event-ttl={{ k3s_config.kube_apiserver.event_ttl }}
-
-kubelet-arg:
-  - max-pods={{ k3s_config.kubelet.max_pods }}
-  - container-log-max-size={{ k3s_config.kubelet.container_log_max_size }}
-  - container-log-max-files={{ k3s_config.kubelet.container_log_max_files }}
-</file>
-
-<file path="helm/platform/cert-manager/namespace.yaml">
----
-# helm/platform/cert-manager/namespace.yaml
-#
-# Applied by helm-cd.yaml BEFORE the helm upgrade --install so the namespace
-# exists before Helm tries to create resources inside it.
-#
-# Pod security enforcement:
-#   enforce: baseline  — cert-manager webhook + cainjector need host network
-#                        access and capabilities that "restricted" blocks.
-#                        "baseline" is the minimum that works. This is a
-#                        documented cert-manager requirement, not a workaround.
-#   warn: restricted   — logs a warning if any pod would violate restricted,
-#                        without blocking it. Useful for drift detection.
-#   audit: restricted  — records violations in the API server audit log.
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: cert-manager
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-manager
-    pod-security.kubernetes.io/enforce: baseline
-    pod-security.kubernetes.io/warn: restricted
-    pod-security.kubernetes.io/audit: restricted
 </file>
 
 <file path="opentofu/bootstrap/state-backend/.terraform.lock.hcl">
@@ -664,6 +689,57 @@ collections:
       MaxRetentionSec=14day
   notify:
     - Restart journald
+</file>
+
+<file path="helm/infrastructure/gateway-config/gateway.yaml">
+---
+# helm/infrastructure/gateway-config/gateway.yaml
+#
+# The Gateway resource defines the actual listeners (ports 80 + 443) that
+# Envoy Gateway programs into the Envoy proxy data plane.
+#
+# Port 80  — HTTP only, used for:
+#             a) Let's Encrypt HTTP-01 ACME challenge responses
+#             b) Redirecting all other HTTP traffic to HTTPS
+#             Applications should NOT serve on HTTP directly.
+#
+# Port 443 — HTTPS with TLS termination. cert-manager provisions and rotates
+#             the wildcard certificate automatically via letsencrypt-prod.
+#             Individual HTTPRoutes attach to this listener by referencing
+#             this Gateway as their parentRef.
+#
+# The wildcard cert *.ac1305-lab.duckdns.org covers:
+#   vault.ac1305-lab.duckdns.org
+#   keycloak.ac1305-lab.duckdns.org
+#   auth.ac1305-lab.duckdns.org   (oauth2-proxy)
+#   <any-app>.ac1305-lab.duckdns.org
+#
+# After applying, Envoy Gateway creates a managed Envoy deployment and a
+# LoadBalancer Service in envoy-gateway-system. On k3s the LoadBalancer
+# is satisfied by k3s's built-in servicelb (formerly klipper-lb).
+# The external IP should match your OCI instance public IP: 155.133.4.76
+# Verify with: kubectl get gateway lab-gateway -n envoy-gateway-system
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lab-gateway
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  gatewayClassName: envoy
+  listeners:
+    # ── HTTP listener ─────────────────────────────────────────────────────────
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Allow HTTPRoutes from any namespace to attach to this listener.
+      # Individual component HTTPRoutes (vault, keycloak, etc.) live in
+      # their own namespaces and need cross-namespace attachment.
+      allowedRoutes:
+        namespaces:
+          from: All
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -1482,6 +1558,54 @@ global:
     namespace: cert-manager
 </file>
 
+<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
+---
+
+- name: Enable fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
+</file>
+
+<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
+---
+- name: Install utility packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - jq
+      - vim
+      - git
+      - unzip
+      - htop
+      - fail2ban
+      - socat
+      - conntrack
+    state: present
+    update_cache: true
+</file>
+
+<file path="helm/platform/cert-manager/helmrelease.yaml">
+---
+# Adding Comment to trigger the workflow again
+# helm/platform/cert-manager/helmrelease.yaml
+#
+# THIS FILE IS READ BY helm-cd.yaml at deploy time.
+# To upgrade cert-manager: change `version` below and merge to main.
+# helm-cd.yaml reads chart_oci, version, release_name, and namespace
+# from this file automatically — no changes to helm-cd.yaml needed.
+#
+# To install  : ensure this folder exists in git → merge to main
+# To upgrade  : change version below → merge to main
+# To uninstall: delete this folder from git → merge to main
+
+chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
+version: "v1.20.2"
+release_name: "cert-manager"
+namespace: "cert-manager"
+</file>
+
 <file path=".github/workflows/helm-cd.yaml">
 ---
 name: Helm CD
@@ -1637,6 +1761,11 @@ jobs:
   ##############################################################
   # 2. DEPLOY INFRASTRUCTURE
   # Opens its own SSH tunnel — tunnels do not persist across jobs.
+  #
+  # PRUNING: kubectl apply --prune -l app.kubernetes.io/part-of=gateway-config
+  # ensures that when a file is removed from helm/infrastructure/gateway-config,
+  # the corresponding resource is deleted from the cluster.
+  # All resources in gateway-config/ must carry this label for pruning to work
   ##############################################################
   deploy-infrastructure:
     name: Deploy Infrastructure Config
@@ -1692,7 +1821,12 @@ jobs:
       - name: Apply infrastructure manifests
         run: |
           chmod 600 ~/.kube/config
-          kubectl apply -f helm/infrastructure/gateway-config/
+          # --prune removes cluster resources whose source files have been deleted
+          # The label selector scopes pruning to only gateway-config resources,
+          # preventing accidental deletion of unrelated cluster resources.
+          kubectl apply -f helm/infrastructure/gateway-config/ \
+            --prune \
+            -l app.kubernetes.io/part-of=gateway-config
 
   ##############################################################
   # 3. DEPLOY PLATFORM COMPONENTS
@@ -2088,6 +2222,12 @@ jobs:
           done
           echo ""
           echo "════════════════════════════════════"
+          echo " GATEWAY STATUS"
+          echo "════════════════════════════════════"
+          kubectl get gatewayclass 2>/dev/null || echo "(no gatewayclasses)"
+          kubectl get gateway -A 2>/dev/null || echo "(no gateways)"
+          echo ""
+          echo "════════════════════════════════════"
           echo " CERT-MANAGER CRDs"
           echo "════════════════════════════════════"
           kubectl get crds 2>/dev/null | grep cert-manager.io || echo "(no cert-manager CRDs)"
@@ -2101,54 +2241,6 @@ jobs:
           echo " CERTIFICATES (all namespaces)"
           echo "════════════════════════════════════"
           kubectl get certificate -A 2>/dev/null || echo "(none)"
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
----
-
-- name: Enable fail2ban
-  ansible.builtin.service:
-    name: fail2ban
-    enabled: true
-    state: started
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
----
-- name: Install utility packages
-  ansible.builtin.apt:
-    name:
-      - curl
-      - jq
-      - vim
-      - git
-      - unzip
-      - htop
-      - fail2ban
-      - socat
-      - conntrack
-    state: present
-    update_cache: true
-</file>
-
-<file path="helm/platform/cert-manager/helmrelease.yaml">
----
-# Adding Comment to trigger the workflow again
-# helm/platform/cert-manager/helmrelease.yaml
-#
-# THIS FILE IS READ BY helm-cd.yaml at deploy time.
-# To upgrade cert-manager: change `version` below and merge to main.
-# helm-cd.yaml reads chart_oci, version, release_name, and namespace
-# from this file automatically — no changes to helm-cd.yaml needed.
-#
-# To install  : ensure this folder exists in git → merge to main
-# To upgrade  : change version below → merge to main
-# To uninstall: delete this folder from git → merge to main
-
-chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
-version: "v1.20.2"
-release_name: "cert-manager"
-namespace: "cert-manager"
 </file>
 
 <file path=".pre-commit-config.yaml">

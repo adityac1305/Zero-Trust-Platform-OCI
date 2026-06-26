@@ -1,0 +1,20 @@
+---
+# helm/infrastructure/gateway-config/gatewayclass.yaml
+#
+# GatewayClass tells Envoy Gateway that it is responsible for managing
+# any Gateway resource that references this class.
+#
+# controllerName MUST match config.envoyGateway.gateway.controllerName
+# in helm/platform/envoy-gateway/values.yaml exactly.
+#
+# This is a cluster-scoped resource — no namespace needed.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: envoy
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  description: "Envoy Gateway — manages ingress for ac1305-lab"
