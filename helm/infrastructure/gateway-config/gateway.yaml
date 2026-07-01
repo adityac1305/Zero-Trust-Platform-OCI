@@ -46,3 +46,21 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
+
+    # -- HTTPS listener
+    # TLS is terminated here at the Envoy proxy layer. App pods receive plain HTTP internally.
+    # certificateRefs lists one cert per subdomain -- Envoy picks the correct cert per request using SNI.
+    # Start with gateway-default-tls (base domain)
+    # When adding an app, add its cert here alongside its HTTPRoute.
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: TERMINATE
+        certificateRefs:
+          - name: gateway-default-tls                        # issued for ac1305-lab.duckdns.org
+            namespace: envoy-gateway-system
+            kind: Secret
+      allowedRoutes:
+        namespaces:
+          from: All

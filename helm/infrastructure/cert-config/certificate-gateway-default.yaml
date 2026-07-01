@@ -1,0 +1,23 @@
+---
+#
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gateway-default-tls
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
+spec:
+  secretName: gateway-default-tls
+  issuerRef:
+    name: letsencrypt-staging             # <-- change to "letsencrypt-prod" after testing
+    kind: ClusterIssuer
+  commonName: "ac1305-lab.duckdns.org"
+  dnsNames:
+    - "ac1305-lab.duckdns.org"
+  privateKey:
+    algorithm: ECSA
+    size: 256
+  renewBefore: 360h                      # renew 15 days before expiration
