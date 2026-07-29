@@ -18,6 +18,6 @@ spec:
   dnsNames:
     - "ac1305-lab.duckdns.org"
   privateKey:
-    algorithm: ECSA
+    algorithm: ECDSA
     size: 256
   renewBefore: 360h                      # renew 15 days before expiration

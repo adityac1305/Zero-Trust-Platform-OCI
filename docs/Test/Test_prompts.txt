@@ -1,0 +1,11 @@
+root@adityac1305-lab:~# kubectl get gateway -A
+NAMESPACE              NAME          CLASS   ADDRESS      PROGRAMMED   AGE
+envoy-gateway-system   lab-gateway   envoy   10.0.0.135   True         33d
+root@adityac1305-lab:~# kubectl get gatewayclass -A
+NAME    CONTROLLER                                      ACCEPTED   AGE
+envoy   gateway.envoyproxy.io/gatewayclass-controller   True       33d
+root@adityac1305-lab:~# kubectl get httproute -A
+No resources found
+root@adityac1305-lab:~# kubectl get HTTPRoute -A
+No resources found
+root@adityac1305-lab:~#
