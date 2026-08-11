@@ -88,6 +88,9 @@ ansible/
         sysctl.yml
   ansible.cfg
   requirements.yml
+docs/
+  Test/
+    Test_prompts.txt
 helm/
   infrastructure/
     cert-config/
@@ -162,84 +165,6 @@ kubelet-arg:
   - max-pods={{ k3s_config.kubelet.max_pods }}
   - container-log-max-size={{ k3s_config.kubelet.container_log_max_size }}
   - container-log-max-files={{ k3s_config.kubelet.container_log_max_files }}
-</file>
-
-<file path="helm/infrastructure/cert-config/certificate-gateway-default.yaml">
----
-#
-
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: gateway-default-tls
-  namespace: envoy-gateway-system
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-config
-spec:
-  secretName: gateway-default-tls
-  issuerRef:
-    name: letsencrypt-staging             # <-- change to "letsencrypt-prod" after testing
-    kind: ClusterIssuer
-  commonName: "ac1305-lab.duckdns.org"
-  dnsNames:
-    - "ac1305-lab.duckdns.org"
-  privateKey:
-    algorithm: ECSA
-    size: 256
-  renewBefore: 360h                      # renew 15 days before expiration
-</file>
-
-<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-prod.yaml">
----
-#
-
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-config
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: adityac1305@gmail.com          # <-- Replace with your email
-    privateKeySecretRef:
-      name: letsencrypt-prod-account-key
-    solvers:
-      - http01:
-          gatewayHTTPRoute:
-            parentRefs:
-              - name: lab-gateway
-                namespace: envoy-gateway-system
-                kind: Gateway
-</file>
-
-<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-staging.yaml">
----
-#
-
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-staging
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-config
-spec:
-  acme:
-    server: https://acme-staging-v02.api.letsencrypt.org/directory
-    email: adityac1305@gmail.com          # <-- Replace with your email
-    privateKeySecretRef:
-      name: letsencrypt-staging-account-key
-    solvers:
-      - http01:
-          gatewayHTTPRoute:
-            parentRefs:
-              - name: lab-gateway
-                namespace: envoy-gateway-system
-                kind: Gateway
 </file>
 
 <file path="helm/infrastructure/gateway-config/gatewayclass.yaml">
@@ -832,6 +757,88 @@ become_method = sudo
 collections:
   - name: community.general
   - name: ansible.posix
+</file>
+
+<file path="docs/Test/Test_prompts.txt">
+
+</file>
+
+<file path="helm/infrastructure/cert-config/certificate-gateway-default.yaml">
+---
+#
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gateway-default-tls
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
+spec:
+  secretName: gateway-default-tls
+  issuerRef:
+    name: letsencrypt-staging             # <-- change to "letsencrypt-prod" after testing
+    kind: ClusterIssuer
+  commonName: "ac1305-lab.duckdns.org"
+  dnsNames:
+    - "ac1305-lab.duckdns.org"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  renewBefore: 360h                      # renew 15 days before expiration
+</file>
+
+<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-prod.yaml">
+---
+#
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: adityac1305@gmail.com          # <-- Replace with your email
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - name: lab-gateway
+                namespace: envoy-gateway-system
+                kind: Gateway
+</file>
+
+<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-staging.yaml">
+---
+#
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: adityac1305@gmail.com          # <-- Replace with your email
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - name: lab-gateway
+                namespace: envoy-gateway-system
+                kind: Gateway
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -3292,151 +3299,6 @@ jobs:
             --syntax-check
 </file>
 
-<file path="repo_structure.txt">
-Folder PATH listing for volume Data
-Volume serial number is 0000006E C87A:83A4
-D:.
-|   .gitignore
-|   .pre-commit-config.yaml
-|   repomix-output.xml
-|   repo_structure.txt
-|   
-+---.github
-|   \---workflows
-|           ansible-ci.yaml
-|           helm-cd.yaml
-|           helm-ci.yaml
-|           infrastructure-deploy.yaml
-|           opentofu-ci.yaml
-|           security-ci.yaml
-|           
-+---ansible
-|   |   ansible.cfg
-|   |   requirements.yml
-|   |   
-|   +---inventories
-|   |   +---dev
-|   |   \---lab
-|   |       |   hosts.ini
-|   |       |   
-|   |       \---group_vars
-|   |               all.yml
-|   |               
-|   +---playbooks
-|   |       k3s-bootstrap.yml
-|   |       k3s-config-rollout.yml
-|   |       os-bootstrap.yml
-|   |       os-rollback.yml
-|   |       site.yml
-|   |       
-|   \---roles
-|       +---k3s
-|       |   +---defaults
-|       |   |       main.yaml
-|       |   |       
-|       |   +---handlers
-|       |   |       main.yaml
-|       |   |       
-|       |   +---tasks
-|       |   |       cleanup.yaml
-|       |   |       config-rollout.yaml
-|       |   |       install.yaml
-|       |   |       kubeconfig.yaml
-|       |   |       logging.yaml
-|       |   |       main.yaml
-|       |   |       prereqs.yaml
-|       |   |       storage.yaml
-|       |   |       validate_disk.yaml
-|       |   |       
-|       |   \---templates
-|       |           config.yaml.j2
-|       |           
-|       \---os-bootstrap
-|           \---tasks
-|                   fail2ban.yml
-|                   firewall.yml
-|                   main.yml
-|                   packages.yml
-|                   ssh.yml
-|                   sysctl.yml
-|                   
-+---helm
-|   +---applications
-|   +---infrastructure
-|   \---platform
-|       +---cert-manager
-|       |       helmrelease.yaml
-|       |       namespace.yaml
-|       |       values.yaml
-|       |       
-|       +---envoy-gateway
-|       +---keycloak
-|       +---oauth2-proxy
-|       \---vault
-\---opentofu
-    +---bootstrap
-    |   \---state-backend
-    |       |   .terraform.lock.hcl
-    |       |   bootstrap.tfplan
-    |       |   bootstrap.tfvars
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   terraform.tfstate
-    |       |   terraform.tfstate.backup
-    |       |   variables.tf
-    |       |   
-    |       +---.terraform
-    |       |   \---providers
-    |       |       \---registry.opentofu.org
-    |       |           \---oracle
-    |       |               \---oci
-    |       |                   \---8.17.0
-    |       |                       |   windows_amd64.lock
-    |       |                       |   
-    |       |                       \---windows_amd64
-    |       |                               terraform-provider-oci_v8.17.0
-    |       |                               
-    |       \---scripts
-    |               apply.sh
-    |               destroy.sh
-    |               init.sh
-    |               plan.sh
-    |               
-    +---environments
-    |   +---dev
-    |   \---lab
-    |       |   .terraform.lock.hcl
-    |       |   backend.tf
-    |       |   lab.tfplan
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   providers.tf
-    |       |   terraform.tfvars
-    |       |   variables.tf
-    |       |   versions.tf
-    |       |   
-    |       \---.terraform
-    |           |   terraform.tfstate
-    |           |   
-    |           \---providers
-    |               \---registry.opentofu.org
-    |                   \---oracle
-    |                       \---oci
-    |                           \---8.15.0
-    |                               |   windows_amd64.lock
-    |                               |   
-    |                               \---windows_amd64
-    |                                       terraform-provider-oci_v8.15.0
-    |                                       
-    +---modules
-    \---scripts
-            apply.sh
-            destroy.sh
-            init.sh
-            plan.sh
-            retry-apply.sh
-</file>
-
 <file path=".github/workflows/infrastructure-deploy.yaml">
 ---
 name: Infrastructure Deploy (CD)
@@ -3712,6 +3574,162 @@ jobs:
           -i inventory/hosts.ini \
           ansible/playbooks/k3s-config-rollout.yml \
           --private-key key.pem
+</file>
+
+<file path="repo_structure.txt">
+Folder PATH listing for volume Data
+Volume serial number is 000000FD C87A:83A4
+D:.
+|   .gitignore
+|   .pre-commit-config.yaml
+|   repomix-output.xml
+|   repo_structure.txt
+|   
++---.github
+|   \---workflows
+|           ansible-ci.yaml
+|           helm-cd.yaml
+|           helm-ci.yaml
+|           infrastructure-deploy.yaml
+|           opentofu-ci.yaml
+|           security-ci.yaml
+|           
++---ansible
+|   |   ansible.cfg
+|   |   requirements.yml
+|   |   
+|   +---inventories
+|   |   +---dev
+|   |   \---lab
+|   |       |   hosts.ini
+|   |       |   
+|   |       \---group_vars
+|   |               all.yml
+|   |               
+|   +---playbooks
+|   |       k3s-bootstrap.yml
+|   |       k3s-config-rollout.yml
+|   |       os-bootstrap.yml
+|   |       os-rollback.yml
+|   |       site.yml
+|   |       
+|   \---roles
+|       +---k3s
+|       |   +---defaults
+|       |   |       main.yaml
+|       |   |       
+|       |   +---handlers
+|       |   |       main.yaml
+|       |   |       
+|       |   +---tasks
+|       |   |       cleanup.yaml
+|       |   |       config-rollout.yaml
+|       |   |       install.yaml
+|       |   |       kubeconfig.yaml
+|       |   |       logging.yaml
+|       |   |       main.yaml
+|       |   |       prereqs.yaml
+|       |   |       storage.yaml
+|       |   |       validate_disk.yaml
+|       |   |       
+|       |   \---templates
+|       |           config.yaml.j2
+|       |           
+|       \---os-bootstrap
+|           \---tasks
+|                   fail2ban.yml
+|                   firewall.yml
+|                   main.yml
+|                   packages.yml
+|                   ssh.yml
+|                   sysctl.yml
+|                   
++---helm
+|   +---applications
+|   +---infrastructure
+|   |   +---cert-config
+|   |   |       certificate-gateway-default.yaml
+|   |   |       clusterissuer-letsencrypt-prod.yaml
+|   |   |       clusterissuer-letsencrypt-staging.yaml
+|   |   |       
+|   |   \---gateway-config
+|   |           gateway.yaml
+|   |           gatewayclass.yaml
+|   |           httproute-redirect.yaml
+|   |           
+|   \---platform
+|       +---cert-manager
+|       |       helmrelease.yaml
+|       |       namespace.yaml
+|       |       values.yaml
+|       |       
+|       \---envoy-gateway
+|               helmrelease.yaml
+|               namespace.yaml
+|               values.yaml
+|               
+\---opentofu
+    +---bootstrap
+    |   \---state-backend
+    |       |   .terraform.lock.hcl
+    |       |   bootstrap.tfplan
+    |       |   bootstrap.tfvars
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   terraform.tfstate
+    |       |   terraform.tfstate.backup
+    |       |   variables.tf
+    |       |   
+    |       +---.terraform
+    |       |   \---providers
+    |       |       \---registry.opentofu.org
+    |       |           \---oracle
+    |       |               \---oci
+    |       |                   \---8.17.0
+    |       |                       |   windows_amd64.lock
+    |       |                       |   
+    |       |                       \---windows_amd64
+    |       |                               terraform-provider-oci_v8.17.0
+    |       |                               
+    |       \---scripts
+    |               apply.sh
+    |               destroy.sh
+    |               init.sh
+    |               plan.sh
+    |               
+    +---environments
+    |   +---dev
+    |   \---lab
+    |       |   .terraform.lock.hcl
+    |       |   backend.tf
+    |       |   lab.tfplan
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   providers.tf
+    |       |   terraform.tfvars
+    |       |   variables.tf
+    |       |   versions.tf
+    |       |   
+    |       \---.terraform
+    |           |   terraform.tfstate
+    |           |   
+    |           \---providers
+    |               \---registry.opentofu.org
+    |                   \---oracle
+    |                       \---oci
+    |                           \---8.15.0
+    |                               |   windows_amd64.lock
+    |                               |   
+    |                               \---windows_amd64
+    |                                       terraform-provider-oci_v8.15.0
+    |                                       
+    +---modules
+    \---scripts
+            apply.sh
+            destroy.sh
+            init.sh
+            plan.sh
+            retry-apply.sh
 </file>
 
 <file path="ansible/roles/k3s/tasks/config-rollout.yaml">
