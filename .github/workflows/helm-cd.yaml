@@ -225,7 +225,7 @@ jobs:
             else
               echo "gateway-config folder not present — skipping"
             fi
-  
+
       - name: Apply cert-config (ClusterIssuers, Certificates)
         run: |
             # Applied after gateway-config because ClusterIssuers reference
@@ -240,7 +240,7 @@ jobs:
             else
               echo "cert-config folder not present — skipping"
             fi
-  
+
       - name: Show infrastructure status
         run: |
             echo "════════════════════════════════════"
@@ -531,12 +531,12 @@ jobs:
       name: lab
     steps:
       - uses: actions/checkout@v4
-  
+
       - uses: actions/download-artifact@v4
         with:
           name: kubeconfig
           path: ~/.kube
-      
+    
       - name: Write SSH Private Key
         run: |
           mkdir -p ~/.ssh
@@ -570,7 +570,7 @@ jobs:
           done
           echo "ERROR: SSH tunnel failed to open in time" >&2
           exit 1
-          
+
       - name: Wait for cert-manager webhook to be ready
         run: |
           chmod 600 ~/.kube/config

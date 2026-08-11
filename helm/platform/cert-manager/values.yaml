@@ -92,7 +92,7 @@ prometheus:
 
 # ── Log level ────────────────────────────────────────────────────────────────
 # 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
-#logLevel: 2
+# logLevel: 2
 
 # ── Global settings ──────────────────────────────────────────────────────────
 global:
