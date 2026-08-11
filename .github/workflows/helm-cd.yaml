@@ -46,6 +46,7 @@ jobs:
       has_vault: ${{ steps.presence.outputs.has_vault }}
       has_keycloak: ${{ steps.presence.outputs.has_keycloak }}
       has_oauth2_proxy: ${{ steps.presence.outputs.has_oauth2_proxy }}
+      has_cert_config: ${{ steps.presence.outputs.has_cert_config }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,6 +83,7 @@ jobs:
           echo "has_vault=$([ -d helm/platform/vault ]                 && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "has_keycloak=$([ -d helm/platform/keycloak ]           && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "has_oauth2_proxy=$([ -d helm/platform/oauth2-proxy ]   && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_cert_config=$([ -d helm/infrastructure/cert-config ]  && echo true || echo false)" >> $GITHUB_OUTPUT
   ##############################################################
   # 1. SETUP KUBECONFIG + VERIFY CONNECTIVITY VIA SSH TUNNEL
   # The kubeconfig stored in the KUBECONFIG secret must have:
@@ -209,15 +211,62 @@ jobs:
           echo "ERROR: SSH tunnel did not come up in time" >&2
           exit 1
 
-      - name: Apply infrastructure manifests
+      - name: Apply gateway-config (GatewayClass, Gateway, HTTPRoutes)
         run: |
-          chmod 600 ~/.kube/config
-          # --prune removes cluster resources whose source files have been deleted
-          # The label selector scopes pruning to only gateway-config resources,
-          # preventing accidental deletion of unrelated cluster resources.
-          kubectl apply -f helm/infrastructure/gateway-config/ \
-            --prune \
-            -l app.kubernetes.io/part-of=gateway-config
+            chmod 600 ~/.kube/config
+            # Only runs if the folder exists (skips gracefully if not present yet)
+            if [ -d helm/infrastructure/gateway-config ]; then
+              kubectl apply -f helm/infrastructure/gateway-config/ \
+                --prune \
+                --selector app.kubernetes.io/part-of=gateway-config \
+                --prune-allowlist=gateway.networking.k8s.io/v1/GatewayClass \
+                --prune-allowlist=gateway.networking.k8s.io/v1/Gateway \
+                --prune-allowlist=gateway.networking.k8s.io/v1/HTTPRoute
+            else
+              echo "gateway-config folder not present — skipping"
+            fi
+
+      - name: Apply cert-config (ClusterIssuers, Certificates)
+        run: |
+            # Applied after gateway-config because ClusterIssuers reference
+            # lab-gateway for HTTP-01 challenge routing.
+            # Only runs if the folder exists.
+            if [ -d helm/infrastructure/cert-config ]; then
+              kubectl apply -f helm/infrastructure/cert-config/ \
+                --prune \
+                --selector app.kubernetes.io/part-of=cert-config \
+                --prune-allowlist=cert-manager.io/v1/ClusterIssuer \
+                --prune-allowlist=cert-manager.io/v1/Certificate
+            else
+              echo "cert-config folder not present — skipping"
+            fi
+
+      - name: Show infrastructure status
+        run: |
+            echo "════════════════════════════════════"
+            echo " GATEWAYCLASS"
+            echo "════════════════════════════════════"
+            kubectl get gatewayclass -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " GATEWAY"
+            echo "════════════════════════════════════"
+            kubectl get gateway -A -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " HTTPROUTES"
+            echo "════════════════════════════════════"
+            kubectl get httproute -A 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " CLUSTERISSUERS"
+            echo "════════════════════════════════════"
+            kubectl get clusterissuer -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " CERTIFICATES"
+            echo "════════════════════════════════════"
+            kubectl get certificate -A 2>/dev/null || echo "(none)"
 
   ##############################################################
   # 3. DEPLOY PLATFORM COMPONENTS
@@ -462,6 +511,87 @@ jobs:
             echo "==> oauth2-proxy not installed — nothing to remove"
           fi
 
+  ################################################################
+  # 3.5. DEPLOY CERT CONFIG (ClusterIssuers + Gateway bootstrap cert)
+  # Must run after deploy-platform -- cert-manager CRDs must exist
+  # before ClusterIssuer and Certificate resources can be applied.
+  # --prune scoped to part-of=cert-config removes deleted files from cluster.
+  ###############################################################
+  deploy-cert-config:
+    name: Deploy Cert Config
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-platform]
+    if: |
+      always() &&
+      needs.changes.outputs.has_cert_config == 'true' &&
+      needs.changes.outputs.any_changed == 'true' &&
+      needs.setup-kubeconfig.result == 'success' &&
+      needs.deploy-platform.result == 'success'
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Write SSH Private Key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
+          chmod 600 ~/.ssh/oci_key
+
+      - name: Add OCI host to known_hosts
+        run: |
+          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
+        run: |
+          ssh -i ~/.ssh/oci_key \
+            -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -o ExitOnForwardFailure=yes \
+            -L 6443:127.0.0.1:6443 \
+            -N -f \
+            "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
+
+      - name: Wait for tunnel to be ready
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "SSH tunnel is up (attempt $i)"
+              exit 0
+            fi
+            echo "Waiting for tunnel... ($i/15)"
+            sleep 5
+          done
+          echo "ERROR: SSH tunnel failed to open in time" >&2
+          exit 1
+
+      - name: Wait for cert-manager webhook to be ready
+        run: |
+          chmod 600 ~/.kube/config
+          kubectl rollout status deployment/cert-manager-webhook \
+            -n cert-manager --timeout=120s
+
+      - name: Apply cert config manifests
+        run: |
+          kubectl apply -f helm/infrastructure/cert-config/ \
+            --prune \
+            -l app.kubernetes.io/part-of=cert-config
+
+      - name: Show issuer and certificate status
+        run: |
+          echo "-- ClusterIssuers --"
+          kubectl get clusterIssuer -o wide
+          echo "-- Certificates --"
+          kubectl get certificate -n envoy-gateway-system -o wide
+          echo "-- Certificate Events"
+          kubectl describe certificate gateway-default-tls \
+            -n envoy-gateway-system 2>/dev/null | tail -n 20 || true
   ##############################################################
   # 4. DEPLOY APPLICATIONS
   # Opens its own SSH tunnel — tunnels do not persist across jobs.
@@ -469,13 +599,15 @@ jobs:
   deploy-applications:
     name: Deploy Applications
     runs-on: ubuntu-latest
-    needs: [changes, setup-kubeconfig, deploy-platform]
+    needs: [changes, setup-kubeconfig, deploy-platform, deploy-cert-config]
     if: |
       always() &&
       needs.changes.outputs.applications == 'true' &&
       needs.setup-kubeconfig.result == 'success' &&
       (needs.deploy-platform.result == 'success' ||
-       needs.deploy-platform.result == 'skipped')
+       needs.deploy-platform.result == 'skipped') &&
+      (needs.deploy-cert-config.result == 'success' ||
+       needs.deploy-cert-config.result == 'skipped')
     environment:
       name: lab
     steps:
@@ -541,7 +673,7 @@ jobs:
   health-check:
     name: Cluster Health Check
     runs-on: ubuntu-latest
-    needs: [changes, setup-kubeconfig, deploy-platform, deploy-applications]
+    needs: [changes, setup-kubeconfig, deploy-platform, deploy-cert-config, deploy-applications]
     if: |
       always() &&
       needs.setup-kubeconfig.result == 'success'
