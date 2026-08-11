@@ -211,15 +211,62 @@ jobs:
           echo "ERROR: SSH tunnel did not come up in time" >&2
           exit 1
 
-      - name: Apply infrastructure manifests
+      - name: Apply gateway-config (GatewayClass, Gateway, HTTPRoutes)
         run: |
-          chmod 600 ~/.kube/config
-          # --prune removes cluster resources whose source files have been deleted
-          # The label selector scopes pruning to only gateway-config resources,
-          # preventing accidental deletion of unrelated cluster resources.
-          kubectl apply -f helm/infrastructure/gateway-config/ \
-            --prune \
-            -l app.kubernetes.io/part-of=gateway-config
+            chmod 600 ~/.kube/config
+            # Only runs if the folder exists (skips gracefully if not present yet)
+            if [ -d helm/infrastructure/gateway-config ]; then
+              kubectl apply -f helm/infrastructure/gateway-config/ \
+                --prune \
+                --selector app.kubernetes.io/part-of=gateway-config \
+                --prune-allowlist=gateway.networking.k8s.io/v1/GatewayClass \
+                --prune-allowlist=gateway.networking.k8s.io/v1/Gateway \
+                --prune-allowlist=gateway.networking.k8s.io/v1/HTTPRoute
+            else
+              echo "gateway-config folder not present — skipping"
+            fi
+  
+      - name: Apply cert-config (ClusterIssuers, Certificates)
+        run: |
+            # Applied after gateway-config because ClusterIssuers reference
+            # lab-gateway for HTTP-01 challenge routing.
+            # Only runs if the folder exists.
+            if [ -d helm/infrastructure/cert-config ]; then
+              kubectl apply -f helm/infrastructure/cert-config/ \
+                --prune \
+                --selector app.kubernetes.io/part-of=cert-config \
+                --prune-allowlist=cert-manager.io/v1/ClusterIssuer \
+                --prune-allowlist=cert-manager.io/v1/Certificate
+            else
+              echo "cert-config folder not present — skipping"
+            fi
+  
+      - name: Show infrastructure status
+        run: |
+            echo "════════════════════════════════════"
+            echo " GATEWAYCLASS"
+            echo "════════════════════════════════════"
+            kubectl get gatewayclass -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " GATEWAY"
+            echo "════════════════════════════════════"
+            kubectl get gateway -A -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " HTTPROUTES"
+            echo "════════════════════════════════════"
+            kubectl get httproute -A 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " CLUSTERISSUERS"
+            echo "════════════════════════════════════"
+            kubectl get clusterissuer -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " CERTIFICATES"
+            echo "════════════════════════════════════"
+            kubectl get certificate -A 2>/dev/null || echo "(none)"
 
   ##############################################################
   # 3. DEPLOY PLATFORM COMPONENTS
