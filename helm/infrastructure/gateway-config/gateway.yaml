@@ -56,7 +56,7 @@ spec:
       protocol: HTTPS
       port: 443
       tls:
-        mode: TERMINATE
+        mode: Terminate
         certificateRefs:
           - name: gateway-default-tls                        # issued for ac1305-lab.duckdns.org
             namespace: envoy-gateway-system
