@@ -5,7 +5,6 @@
 #
 # To upgrade cert-manager: change version in
 # helmrelease.yaml → merge to main.
-
 # ── CRD management ───────────────────────────────────────────────────────────
 # enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
 # keep=true    → CRDs survive `helm uninstall`.
