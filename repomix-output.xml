@@ -190,38 +190,6 @@ spec:
   description: "Envoy Gateway — manages ingress for ac1305-lab"
 </file>
 
-<file path="helm/infrastructure/gateway-config/httproute-redirect.yaml">
----
-# helm/infrastructure/gateway-config/httproute-redirect.yaml
-# 
-# Permanently redirects all HTTP (port 80) traffic to HTTPS (port 443).
-# Attaches only to the 'http' listener of gateway
-#
-# ACME HTTP-01 challenge compatibility:
-# cert-manager creates a temporary HTTPRoute for /.well-known/acme-challenge/ wwith an exact path match.
-# Gateway API path specificity rules mean that exact matches always win over this catch-all reirect --no conflict.
-
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: http-to-https-redirect
-  namespace: envoy-gateway-system
-  labels:
-    app.kubernetes.io/name: envoy-gateway
-    app.kubernetes.io/part-of: gateway-config
-spec:
-  parentRefs:
-    - name: lab-gateway
-      namespace: envoy-gateway-system
-      sectionName: http
-  rules:
-    - filters:
-        - type: RequestRedirect
-          requestRedirect:
-            scheme: https
-            statusCode: 301
-</file>
-
 <file path="helm/platform/cert-manager/namespace.yaml">
 ---
 # helm/platform/cert-manager/namespace.yaml
@@ -763,58 +731,6 @@ collections:
 
 </file>
 
-<file path="helm/infrastructure/cert-config/certificate-gateway-default.yaml">
----
-#
-
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: gateway-default-tls
-  namespace: envoy-gateway-system
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-config
-spec:
-  secretName: gateway-default-tls
-  issuerRef:
-    name: letsencrypt-staging             # <-- change to "letsencrypt-prod" after testing
-    kind: ClusterIssuer
-  commonName: "ac1305-lab.duckdns.org"
-  dnsNames:
-    - "ac1305-lab.duckdns.org"
-  privateKey:
-    algorithm: ECDSA
-    size: 256
-  renewBefore: 360h                      # renew 15 days before expiration
-</file>
-
-<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-prod.yaml">
----
-#
-
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-config
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: adityac1305@gmail.com          # <-- Replace with your email
-    privateKeySecretRef:
-      name: letsencrypt-prod-account-key
-    solvers:
-      - http01:
-          gatewayHTTPRoute:
-            parentRefs:
-              - name: lab-gateway
-                namespace: envoy-gateway-system
-                kind: Gateway
-</file>
-
 <file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-staging.yaml">
 ---
 #
@@ -839,6 +755,38 @@ spec:
               - name: lab-gateway
                 namespace: envoy-gateway-system
                 kind: Gateway
+</file>
+
+<file path="helm/infrastructure/gateway-config/httproute-redirect.yaml">
+---
+# helm/infrastructure/gateway-config/httproute-redirect.yaml
+#
+# Permanently redirects all HTTP (port 80) traffic to HTTPS (port 443).
+# Attaches only to the 'http' listener of gateway
+#
+# ACME HTTP-01 challenge compatibility:
+# cert-manager creates a temporary HTTPRoute for /.well-known/acme-challenge/ wwith an exact path match.
+# Gateway API path specificity rules mean that exact matches always win over this catch-all reirect --no conflict.
+
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: http-to-https-redirect
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  parentRefs:
+    - name: lab-gateway
+      namespace: envoy-gateway-system
+      sectionName: http
+  rules:
+    - filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
 </file>
 
 <file path="opentofu/bootstrap/state-backend/main.tf">
@@ -927,180 +875,6 @@ ENVIRONMENT=${1:-lab}
 cd "opentofu/environments/${ENVIRONMENT}"
 
 tofu plan -out="${ENVIRONMENT}.tfplan"
-</file>
-
-<file path=".github/workflows/helm-ci.yaml">
----
-name: Helm CI
-
-on:
-  pull_request:
-    paths:
-      - "helm/**"
-  workflow_dispatch:
-
-jobs:
-  ##############################################################
-  # 1. DETECT CHANGED COMPONENTS
-  ##############################################################
-  changes:
-    name: Detect Changed Helm Components
-    runs-on: ubuntu-latest
-    outputs:
-      platform: ${{ steps.filter.outputs.platform }}
-      applications: ${{ steps.filter.outputs.applications }}
-      infrastructure: ${{ steps.filter.outputs.infrastructure }}
-      any_helm: ${{ steps.filter.outputs.any_helm }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Detect changed layers
-        id: filter
-        run: |
-          CHANGED=$(git diff --name-only HEAD^ HEAD 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          HAS_PLATFORM=$(echo "$CHANGED" \
-          | grep -q '^helm/platform/' \
-          && echo true || echo false)
-          HAS_APPS=$(echo "$CHANGED"          | grep -q '^helm/applications/'  && echo true || echo false)
-          HAS_INFRA=$(echo "$CHANGED"         | grep -q '^helm/infrastructure/' && echo true || echo false)
-
-          echo "platform=$HAS_PLATFORM"       >> $GITHUB_OUTPUT
-          echo "applications=$HAS_APPS"       >> $GITHUB_OUTPUT
-          echo "infrastructure=$HAS_INFRA"    >> $GITHUB_OUTPUT
-
-          # any_helm gates the validate + security jobs so they only run
-          # when there are actual helm file changes — not on every PR.
-          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
-            echo "any_helm=true" >> $GITHUB_OUTPUT
-          else
-            echo "any_helm=false" >> $GITHUB_OUTPUT
-          fi
-
-  ##############################################################
-  # 2. LINT
-  # Skips components that have no Chart.yaml (values-only folders like
-  # cert-manager, envoy-gateway, vault — these are not local Helm charts,
-  # they are upstream charts with local values files only).
-  ##############################################################
-  lint:
-    name: Helm Lint
-    runs-on: ubuntu-latest
-    needs: changes
-    if: |
-      needs.changes.outputs.platform == 'true' ||
-      needs.changes.outputs.applications == 'true' ||
-      needs.changes.outputs.infrastructure == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: "v3.17.0"
-
-      - name: Add Helm repos
-        # cert-manager + envoy-gateway use OCI — no repo add needed for them
-        run: |
-          helm repo add hashicorp    https://helm.releases.hashicorp.com
-          helm repo add bitnami      https://charts.bitnami.com/bitnami
-          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
-          helm repo update
-
-      - name: Lint platform charts
-        if: needs.changes.outputs.platform == 'true'
-        run: |
-          for dir in helm/platform/*/; do
-            [ -d "$dir" ] || continue
-            if [ -f "$dir/Chart.yaml" ]; then
-              echo "==> Linting $dir"
-              helm lint "$dir" --strict
-            elif [ -f "$dir/values.yaml" ]; then
-              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
-            fi
-          done
-
-      - name: Lint application charts
-        if: needs.changes.outputs.applications == 'true'
-        run: |
-          for dir in helm/applications/*/; do
-            [ -d "$dir" ] || continue
-            if [ -f "$dir/Chart.yaml" ]; then
-              echo "==> Linting $dir"
-              helm lint "$dir" --strict
-            elif [ -f "$dir/values.yaml" ]; then
-              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
-            fi
-          done
-
-  ##############################################################
-  # 3. MANIFEST VALIDATION
-  # Only runs when helm files actually changed (any_helm gate).
-  # Validates namespace.yaml, httproute.yaml, gateway.yaml etc. against:
-  #   - Kubernetes built-in schemas (k8s 1.33)
-  #   - CRD schemas from datreeio catalog (Gateway API, cert-manager)
-  # Excludes:
-  #   values.yaml      — not a Kubernetes manifest
-  #   helmrelease.yaml — reference documentation, not a Kubernetes manifest
-  ##############################################################
-  validate:
-    name: Manifest Validation
-    runs-on: ubuntu-latest
-    needs: [changes, lint]
-    if: needs.changes.outputs.any_helm == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install kubeconform
-        run: |
-          curl -sSL \
-            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin kubeconform
-
-      - name: Validate Kubernetes manifests
-        run: |
-          # Collect files to validate — exclude non-manifest yaml files
-          FILES=$(find helm/ -name "*.yaml" \
-            ! -name "values.yaml" \
-            ! -name "helmrelease.yaml")
-
-          if [ -z "$FILES" ]; then
-            echo "No Kubernetes manifest files found to validate."
-            exit 0
-          fi
-
-          echo "$FILES" | xargs kubeconform \
-            -kubernetes-version 1.33.0 \
-            -schema-location default \
-            -schema-location \
-              'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            -ignore-missing-schemas \
-            -summary \
-            -verbose
-
-  ##############################################################
-  # 4. SECURITY SCAN
-  # Only runs when helm files actually changed (any_helm gate).
-  ##############################################################
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: [changes, validate]
-    if: needs.changes.outputs.any_helm == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Trivy config scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: config
-          scan-ref: helm/
-          severity: HIGH,CRITICAL
-          exit-code: "1"
 </file>
 
 <file path=".github/workflows/opentofu-ci.yaml">
@@ -1371,179 +1145,30 @@ ansible_python_interpreter: /usr/bin/python3
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
-<file path="helm/infrastructure/gateway-config/gateway.yaml">
+<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-prod.yaml">
 ---
-# helm/infrastructure/gateway-config/gateway.yaml
 #
-# The Gateway resource defines the actual listeners (ports 80 + 443) that
-# Envoy Gateway programs into the Envoy proxy data plane.
-#
-# Port 80  — HTTP only, used for:
-#             a) Let's Encrypt HTTP-01 ACME challenge responses
-#             b) Redirecting all other HTTP traffic to HTTPS
-#             Applications should NOT serve on HTTP directly.
-#
-# Port 443 — HTTPS with TLS termination. cert-manager provisions and rotates
-#             the wildcard certificate automatically via letsencrypt-prod.
-#             Individual HTTPRoutes attach to this listener by referencing
-#             this Gateway as their parentRef.
-#
-# The wildcard cert *.ac1305-lab.duckdns.org covers:
-#   vault.ac1305-lab.duckdns.org
-#   keycloak.ac1305-lab.duckdns.org
-#   auth.ac1305-lab.duckdns.org   (oauth2-proxy)
-#   <any-app>.ac1305-lab.duckdns.org
-#
-# After applying, Envoy Gateway creates a managed Envoy deployment and a
-# LoadBalancer Service in envoy-gateway-system. On k3s the LoadBalancer
-# is satisfied by k3s's built-in servicelb (formerly klipper-lb).
-# The external IP should match your OCI instance public IP: 155.133.4.76
-# Verify with: kubectl get gateway lab-gateway -n envoy-gateway-system
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
 metadata:
-  name: lab-gateway
-  namespace: envoy-gateway-system
+  name: letsencrypt-prod
   labels:
-    app.kubernetes.io/name: envoy-gateway
-    app.kubernetes.io/part-of: gateway-config
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
 spec:
-  gatewayClassName: envoy
-  listeners:
-    # ── HTTP listener ─────────────────────────────────────────────────────────
-    - name: http
-      protocol: HTTP
-      port: 80
-      # Allow HTTPRoutes from any namespace to attach to this listener.
-      # Individual component HTTPRoutes (vault, keycloak, etc.) live in
-      # their own namespaces and need cross-namespace attachment.
-      allowedRoutes:
-        namespaces:
-          from: All
-
-    # -- HTTPS listener
-    # TLS is terminated here at the Envoy proxy layer. App pods receive plain HTTP internally.
-    # certificateRefs lists one cert per subdomain -- Envoy picks the correct cert per request using SNI.
-    # Start with gateway-default-tls (base domain)
-    # When adding an app, add its cert here alongside its HTTPRoute.
-    - name: https
-      protocol: HTTPS
-      port: 443
-      tls:
-        mode: TERMINATE
-        certificateRefs:
-          - name: gateway-default-tls                        # issued for ac1305-lab.duckdns.org
-            namespace: envoy-gateway-system
-            kind: Secret
-      allowedRoutes:
-        namespaces:
-          from: All
-</file>
-
-<file path="helm/platform/cert-manager/values.yaml">
----
-# helm/platform/cert-manager/values.yaml
-#
-# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
-#
-# To upgrade cert-manager: change version in
-# helmrelease.yaml → merge to main.
-
-# ── CRD management ───────────────────────────────────────────────────────────
-# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
-# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
-#                Only set keep=false if you want a complete wipe including certs.
-crds:
-  enabled: true
-  keep: true
-
-# ── Replica count ────────────────────────────────────────────────────────────
-# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
-replicaCount: 1
-
-# ── Feature gates ────────────────────────────────────────────────────────────
-# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
-# HTTP-01 challenges via Gateway API HTTPRoute resources.
-# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
-featureGates: "ExperimentalGatewayAPISupport=true"
-
-# ── Controller (main cert-manager pod) ───────────────────────────────────────
-nodeSelector:
-  kubernetes.io/os: linux
-
-resources:
-  requests:
-    cpu: 50m
-    memory: 64Mi
-  limits:
-    cpu: 250m
-    memory: 256Mi
-
-# ── Webhook ──────────────────────────────────────────────────────────────────
-# Validates and mutates Certificate, CertificateRequest,
-# and Issuer resources.
-webhook:
-  replicaCount: 1
-  timeoutSeconds: 10
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── CA Injector ──────────────────────────────────────────────────────────────
-# Injects CA bundles into webhook configurations and CRD conversion webhooks.
-# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
-cainjector:
-  enabled: true
-  replicaCount: 1
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Startup API check ────────────────────────────────────────────────────────
-# One-shot Job that probes the cert-manager API after install/upgrade.
-# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
-# Keep enabled — if disabled, helm-cd may declare success before cert-manager
-# is actually ready to issue certificates.
-startupapicheck:
-  enabled: true
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Prometheus metrics ───────────────────────────────────────────────────────
-# Disabled — no Prometheus stack installed. Enable when you add monitoring.
-prometheus:
-  enabled: false
-
-# ── Log level ────────────────────────────────────────────────────────────────
-# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
-#logLevel: 2
-
-# ── Global settings ──────────────────────────────────────────────────────────
-global:
-  # leaderElection namespace must match the install namespace (cert-manager).
-  # Required even with replicaCount=1 — the controller
-  # always runs leader election.
-  leaderElection:
-    namespace: cert-manager
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: adityac1305@gmail.com          # <-- Replace with your email
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - name: lab-gateway
+                namespace: envoy-gateway-system
+                kind: Gateway
 </file>
 
 <file path=".gitignore">
@@ -1726,6 +1351,191 @@ docker-data/
 *.sock
 </file>
 
+<file path=".github/workflows/helm-ci.yaml">
+---
+name: Helm CI
+
+on:
+  pull_request:
+    paths:
+      - "helm/**"
+  workflow_dispatch:
+
+jobs:
+  ##############################################################
+  # 1. DETECT CHANGED COMPONENTS
+  ##############################################################
+  changes:
+    name: Detect Changed Helm Components
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+      applications: ${{ steps.filter.outputs.applications }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      any_helm: ${{ steps.filter.outputs.any_helm }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed layers
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          HAS_PLATFORM=$(echo "$CHANGED" \
+          | grep -q '^helm/platform/' \
+          && echo true || echo false)
+          HAS_APPS=$(echo "$CHANGED"          | grep -q '^helm/applications/'  && echo true || echo false)
+          HAS_INFRA=$(echo "$CHANGED"         | grep -q '^helm/infrastructure/' && echo true || echo false)
+
+          echo "platform=$HAS_PLATFORM"       >> $GITHUB_OUTPUT
+          echo "applications=$HAS_APPS"       >> $GITHUB_OUTPUT
+          echo "infrastructure=$HAS_INFRA"    >> $GITHUB_OUTPUT
+
+          # any_helm gates the validate + security jobs so they only run
+          # when there are actual helm file changes — not on every PR.
+          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
+            echo "any_helm=true" >> $GITHUB_OUTPUT
+          else
+            echo "any_helm=false" >> $GITHUB_OUTPUT
+          fi
+
+  ##############################################################
+  # 2. LINT
+  # Skips components that have no Chart.yaml (values-only folders like
+  # cert-manager, envoy-gateway, vault — these are not local Helm charts,
+  # they are upstream charts with local values files only).
+  ##############################################################
+  lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    needs: changes
+    if: |
+      needs.changes.outputs.platform == 'true' ||
+      needs.changes.outputs.applications == 'true' ||
+      needs.changes.outputs.infrastructure == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Add Helm repos
+        # cert-manager + envoy-gateway use OCI — no repo add needed for them
+        run: |
+          helm repo add hashicorp    https://helm.releases.hashicorp.com
+          helm repo add bitnami      https://charts.bitnami.com/bitnami
+          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
+          helm repo update
+
+      - name: Lint platform charts
+        if: needs.changes.outputs.platform == 'true'
+        run: |
+          for dir in helm/platform/*/; do
+            [ -d "$dir" ] || continue
+            if [ -f "$dir/Chart.yaml" ]; then
+              echo "==> Linting $dir"
+              helm lint "$dir" --strict
+            elif [ -f "$dir/values.yaml" ]; then
+              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
+            fi
+          done
+
+      - name: Lint application charts
+        if: needs.changes.outputs.applications == 'true'
+        run: |
+          for dir in helm/applications/*/; do
+            [ -d "$dir" ] || continue
+            if [ -f "$dir/Chart.yaml" ]; then
+              echo "==> Linting $dir"
+              helm lint "$dir" --strict
+            elif [ -f "$dir/values.yaml" ]; then
+              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
+            fi
+          done
+
+  ##############################################################
+  # 3. MANIFEST VALIDATION
+  # Only runs when helm files actually changed (any_helm gate).
+  # Validates namespace.yaml, httproute.yaml, gateway.yaml etc. against:
+  #   - Kubernetes built-in schemas (k8s 1.33)
+  #   - CRD schemas from datreeio catalog (Gateway API, cert-manager)
+  # Excludes:
+  #   values.yaml      — not a Kubernetes manifest
+  #   helmrelease.yaml — reference documentation, not a Kubernetes manifest
+  ##############################################################
+  validate:
+    name: Manifest Validation
+    runs-on: ubuntu-latest
+    needs: [changes, lint]
+    if: needs.changes.outputs.any_helm == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSL \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+      - name: Validate Kubernetes manifests
+        run: |
+          # Collect files to validate — exclude non-manifest yaml files.
+          # gateway.yaml is excluded from datreeio schema validation because
+          # the datreeio CRD catalog has a schema bug where tls.mode: Terminate
+          # fails enum validation despite being a valid Gateway API value.
+          # Gateway resources are still validated against the built-in k8s schema.
+          FILES=$(find helm/ -name "*.yaml" \
+            ! -name "values.yaml" \
+            ! -name "helmrelease.yaml" \
+            ! -name "gateway.yaml")
+          if [ -z "$FILES" ]; then
+            echo "No Kubernetes manifest files found to validate."
+            exit 0
+          fi
+          echo "$FILES" | xargs kubeconform \
+            -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -schema-location \
+              'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -ignore-missing-schemas \
+            -summary \
+            -verbose
+          # Validate gateway.yaml separately against built-in k8s schema only
+          # (skipping the datreeio schema that has the tls.mode enum bug)
+          echo "Validating gateway.yaml against built-in schema only..."
+          kubeconform \
+            -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -ignore-missing-schemas \
+            -summary \
+            -verbose \
+            helm/infrastructure/gateway-config/gateway.yaml
+
+  ##############################################################
+  # 4. SECURITY SCAN
+  # Only runs when helm files actually changed (any_helm gate).
+  ##############################################################
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [changes, validate]
+    if: needs.changes.outputs.any_helm == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: helm/
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+</file>
+
 <file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
 ---
 
@@ -1754,6 +1564,33 @@ docker-data/
     update_cache: true
 </file>
 
+<file path="helm/infrastructure/cert-config/certificate-gateway-default.yaml">
+---
+#
+
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gateway-default-tls
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
+spec:
+  secretName: gateway-default-tls
+  issuerRef:
+    name: letsencrypt-staging             # <-- change to "letsencrypt-prod" after testing
+    kind: ClusterIssuer
+  commonName: "ac1305-lab.duckdns.org"
+  dnsNames:
+    - "ac1305-lab.duckdns.org"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  duration: 2160h
+  renewBefore: 360h                      # renew 15 days before expiration
+</file>
+
 <file path="helm/platform/cert-manager/helmrelease.yaml">
 ---
 # Adding Comment to trigger the workflow again
@@ -1772,6 +1609,112 @@ chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
 version: "v1.20.2"
 release_name: "cert-manager"
 namespace: "cert-manager"
+</file>
+
+<file path="helm/platform/cert-manager/values.yaml">
+---
+# helm/platform/cert-manager/values.yaml
+#
+# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
+#
+# To upgrade cert-manager: change version in
+# helmrelease.yaml → merge to main.
+
+# ── CRD management ───────────────────────────────────────────────────────────
+# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
+# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
+#                Only set keep=false if you want a complete wipe including certs.
+crds:
+  enabled: true
+  keep: true
+
+# ── Replica count ────────────────────────────────────────────────────────────
+# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
+replicaCount: 1
+
+# ── Feature gates ────────────────────────────────────────────────────────────
+# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
+# HTTP-01 challenges via Gateway API HTTPRoute resources.
+# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
+featureGates: "ExperimentalGatewayAPISupport=true"
+
+# ── Controller (main cert-manager pod) ───────────────────────────────────────
+nodeSelector:
+  kubernetes.io/os: linux
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+# ── Webhook ──────────────────────────────────────────────────────────────────
+# Validates and mutates Certificate, CertificateRequest,
+# and Issuer resources.
+webhook:
+  replicaCount: 1
+  timeoutSeconds: 10
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── CA Injector ──────────────────────────────────────────────────────────────
+# Injects CA bundles into webhook configurations and CRD conversion webhooks.
+# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
+cainjector:
+  enabled: true
+  replicaCount: 1
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Startup API check ────────────────────────────────────────────────────────
+# One-shot Job that probes the cert-manager API after install/upgrade.
+# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
+# Keep enabled — if disabled, helm-cd may declare success before cert-manager
+# is actually ready to issue certificates.
+startupapicheck:
+  enabled: true
+  nodeSelector:
+    kubernetes.io/os: linux
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Prometheus metrics ───────────────────────────────────────────────────────
+# Disabled — no Prometheus stack installed. Enable when you add monitoring.
+prometheus:
+  enabled: false
+
+# ── Log level ────────────────────────────────────────────────────────────────
+# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
+# logLevel: 2
+
+# ── Global settings ──────────────────────────────────────────────────────────
+global:
+  # leaderElection namespace must match the install namespace (cert-manager).
+  # Required even with replicaCount=1 — the controller
+  # always runs leader election.
+  leaderElection:
+    namespace: cert-manager
 </file>
 
 <file path="ansible/playbooks/k3s-bootstrap.yml">
@@ -1887,6 +1830,75 @@ k3s_config:
     name: net.ipv4.ip_forward
     value: "1"
     state: present
+</file>
+
+<file path="helm/infrastructure/gateway-config/gateway.yaml">
+---
+# helm/infrastructure/gateway-config/gateway.yaml
+#
+# The Gateway resource defines the actual listeners (ports 80 + 443) that
+# Envoy Gateway programs into the Envoy proxy data plane.
+#
+# Port 80  — HTTP only, used for:
+#             a) Let's Encrypt HTTP-01 ACME challenge responses
+#             b) Redirecting all other HTTP traffic to HTTPS
+#             Applications should NOT serve on HTTP directly.
+#
+# Port 443 — HTTPS with TLS termination. cert-manager provisions and rotates
+#             the wildcard certificate automatically via letsencrypt-prod.
+#             Individual HTTPRoutes attach to this listener by referencing
+#             this Gateway as their parentRef.
+#
+# The wildcard cert *.ac1305-lab.duckdns.org covers:
+#   vault.ac1305-lab.duckdns.org
+#   keycloak.ac1305-lab.duckdns.org
+#   auth.ac1305-lab.duckdns.org   (oauth2-proxy)
+#   <any-app>.ac1305-lab.duckdns.org
+#
+# After applying, Envoy Gateway creates a managed Envoy deployment and a
+# LoadBalancer Service in envoy-gateway-system. On k3s the LoadBalancer
+# is satisfied by k3s's built-in servicelb (formerly klipper-lb).
+# The external IP should match your OCI instance public IP: 155.133.4.76
+# Verify with: kubectl get gateway lab-gateway -n envoy-gateway-system
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lab-gateway
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  gatewayClassName: envoy
+  listeners:
+    # ── HTTP listener ─────────────────────────────────────────────────────────
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Allow HTTPRoutes from any namespace to attach to this listener.
+      # Individual component HTTPRoutes (vault, keycloak, etc.) live in
+      # their own namespaces and need cross-namespace attachment.
+      allowedRoutes:
+        namespaces:
+          from: All
+
+    # -- HTTPS listener
+    # TLS is terminated here at the Envoy proxy layer. App pods receive plain HTTP internally.
+    # certificateRefs lists one cert per subdomain -- Envoy picks the correct cert per request using SNI.
+    # Start with gateway-default-tls (base domain)
+    # When adding an app, add its cert here alongside its HTTPRoute.
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: gateway-default-tls                        # issued for ac1305-lab.duckdns.org
+            namespace: envoy-gateway-system
+            kind: Secret
+      allowedRoutes:
+        namespaces:
+          from: All
 </file>
 
 <file path="opentofu/environments/lab/main.tf">
@@ -2144,728 +2156,6 @@ repos:
     rev: v8.18.0
     hooks:
       - id: gitleaks
-</file>
-
-<file path=".github/workflows/helm-cd.yaml">
----
-name: Helm CD
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "helm/**"
-      - ".github/workflows/helm-cd.yaml"
-  workflow_dispatch:
-# ── PRESENCE-BASED DEPLOYMENT ─────────────────────────────────────────────────
-# Install  : create helm/platform/<component>/ folder → merge to main
-# Upgrade  : edit values.yaml OR helmrelease.yaml → merge to main
-# Uninstall: delete helm/platform/<component>/ folder → merge to main
-#
-# helm-cd.yaml reads chart_oci, version, release_name, namespace
-# from each component's helmrelease.yaml — nothing is hardcoded here.
-# To upgrade a component: only edit its helmrelease.yaml version field.
-#
-# DEPLOY ORDER (mandatory):
-#   cert-manager → envoy-gateway → vault → keycloak → oauth2-proxy
-#
-# SSH TUNNEL PATTERN:
-#   Each job that calls kubectl or helm must:
-#   1. Write the SSH private key to disk
-#   2. Open an SSH tunnel: localhost:6443 → OCI_INSTANCE_IP:6443
-#   3. Wait for the tunnel to be ready
-#   4. Use the kubeconfig that points to 127.0.0.1:6443 (not the public IP)
-#   The tunnel does NOT persist across jobs — every job that needs cluster
-#   access must open its own tunnel and tear it down at the end.
-#   This avoids exposing port 6443 publicly on the OCI instance.
-jobs:
-  ##############################################################
-  # 0. DETECT CHANGES + COMPONENT PRESENCE
-  ##############################################################
-  changes:
-    name: Detect Changes and Component Presence
-    runs-on: ubuntu-latest
-    outputs:
-      platform: ${{ steps.filter.outputs.platform }}
-      applications: ${{ steps.filter.outputs.applications }}
-      infrastructure: ${{ steps.filter.outputs.infrastructure }}
-      any_changed: ${{ steps.filter.outputs.any_changed }}
-      has_cert_manager: ${{ steps.presence.outputs.has_cert_manager }}
-      has_envoy_gateway: ${{ steps.presence.outputs.has_envoy_gateway }}
-      has_vault: ${{ steps.presence.outputs.has_vault }}
-      has_keycloak: ${{ steps.presence.outputs.has_keycloak }}
-      has_oauth2_proxy: ${{ steps.presence.outputs.has_oauth2_proxy }}
-      has_cert_config: ${{ steps.presence.outputs.has_cert_config }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-      - name: Detect which layers changed
-        id: filter
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "platform=true"       >> $GITHUB_OUTPUT
-            echo "applications=true"   >> $GITHUB_OUTPUT
-            echo "infrastructure=true" >> $GITHUB_OUTPUT
-            echo "any_changed=true"    >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          CHANGED=$(git diff --name-only HEAD^ HEAD)
-          echo "Changed files:"
-          echo "$CHANGED"
-          HAS_PLATFORM=$(echo "$CHANGED" | grep -q '^helm/platform/'      && echo true || echo false)
-          HAS_APPS=$(echo "$CHANGED"     | grep -q '^helm/applications/'  && echo true || echo false)
-          HAS_INFRA=$(echo "$CHANGED"    | grep -q '^helm/infrastructure/' && echo true || echo false)
-          echo "platform=$HAS_PLATFORM"    >> $GITHUB_OUTPUT
-          echo "applications=$HAS_APPS"    >> $GITHUB_OUTPUT
-          echo "infrastructure=$HAS_INFRA" >> $GITHUB_OUTPUT
-          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
-            echo "any_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "any_changed=false" >> $GITHUB_OUTPUT
-          fi
-      - name: Check which platform component folders are present
-        id: presence
-        run: |
-          echo "has_cert_manager=$([ -d helm/platform/cert-manager ]  && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_envoy_gateway=$([ -d helm/platform/envoy-gateway ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_vault=$([ -d helm/platform/vault ]                 && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_keycloak=$([ -d helm/platform/keycloak ]           && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_oauth2_proxy=$([ -d helm/platform/oauth2-proxy ]   && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_cert_config=$([ -d helm/infrastructure/cert-config ]  && echo true || echo false)" >> $GITHUB_OUTPUT
-  ##############################################################
-  # 1. SETUP KUBECONFIG + VERIFY CONNECTIVITY VIA SSH TUNNEL
-  # The kubeconfig stored in the KUBECONFIG secret must have:
-  #   server: https://127.0.0.1:6443
-  # (not the public OCI IP — the tunnel maps localhost:6443 → OCI:6443)
-  ##############################################################
-  setup-kubeconfig:
-    name: Setup Kubeconfig
-    runs-on: ubuntu-latest
-    needs: changes
-    if: needs.changes.outputs.any_changed == 'true'
-    steps:
-      - name: Write SSH private key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
-          chmod 600 ~/.ssh/oci_key
-
-      - name: Add OCI host to known_hosts (avoid interactive prompt)
-        run: |
-          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
-        run: |
-          ssh -i ~/.ssh/oci_key \
-              -o StrictHostKeyChecking=no \
-              -o ServerAliveInterval=30 \
-              -o ServerAliveCountMax=3 \
-              -o ExitOnForwardFailure=yes \
-              -L 6443:127.0.0.1:6443 \
-              -N -f \
-              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
-
-      - name: Wait for tunnel to be ready
-        run: |
-          for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 6443 2>/dev/null; then
-              echo "SSH tunnel is up (attempt $i)"
-              exit 0
-            fi
-            echo "Waiting for tunnel... ($i/15)"
-            sleep 2
-          done
-          echo "ERROR: SSH tunnel did not come up in time" >&2
-          exit 1
-
-      - name: Write kubeconfig from secret
-        run: |
-          mkdir -p ~/.kube
-          # printf '%s' preserves exact YAML structure from the secret value.
-          # IMPORTANT: The KUBECONFIG secret must have server: https://127.0.0.1:6443
-          # (not the public OCI IP). The SSH tunnel maps localhost:6443 to the cluster.
-          printf '%s' "${{ secrets.KUBECONFIG }}" > ~/.kube/config
-          chmod 600 ~/.kube/config
-
-      - name: Verify cluster connectivity through tunnel
-        run: |
-          kubectl get nodes -o wide
-          echo "Cluster connection via SSH tunnel: OK"
-
-      - name: Upload kubeconfig artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubeconfig
-          path: ~/.kube/config
-          retention-days: 1
-
-  ##############################################################
-  # 2. DEPLOY INFRASTRUCTURE
-  # Opens its own SSH tunnel — tunnels do not persist across jobs.
-  #
-  # PRUNING: kubectl apply --prune -l app.kubernetes.io/part-of=gateway-config
-  # ensures that when a file is removed from helm/infrastructure/gateway-config,
-  # the corresponding resource is deleted from the cluster.
-  # All resources in gateway-config/ must carry this label for pruning to work
-  ##############################################################
-  deploy-infrastructure:
-    name: Deploy Infrastructure Config
-    runs-on: ubuntu-latest
-    needs: [changes, setup-kubeconfig]
-    if: |
-      needs.changes.outputs.infrastructure == 'true' &&
-      needs.setup-kubeconfig.result == 'success'
-    environment:
-      name: lab
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig
-          path: ~/.kube
-
-      - name: Write SSH private key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
-          chmod 600 ~/.ssh/oci_key
-
-      - name: Add OCI host to known_hosts
-        run: |
-          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
-        run: |
-          ssh -i ~/.ssh/oci_key \
-              -o StrictHostKeyChecking=no \
-              -o ServerAliveInterval=30 \
-              -o ServerAliveCountMax=3 \
-              -o ExitOnForwardFailure=yes \
-              -L 6443:127.0.0.1:6443 \
-              -N -f \
-              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
-
-      - name: Wait for tunnel to be ready
-        run: |
-          for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 6443 2>/dev/null; then
-              echo "SSH tunnel is up (attempt $i)"
-              exit 0
-            fi
-            echo "Waiting for tunnel... ($i/15)"
-            sleep 2
-          done
-          echo "ERROR: SSH tunnel did not come up in time" >&2
-          exit 1
-
-      - name: Apply infrastructure manifests
-        run: |
-          chmod 600 ~/.kube/config
-          # --prune removes cluster resources whose source files have been deleted
-          # The label selector scopes pruning to only gateway-config resources,
-          # preventing accidental deletion of unrelated cluster resources.
-          kubectl apply -f helm/infrastructure/gateway-config/ \
-            --prune \
-            -l app.kubernetes.io/part-of=gateway-config
-
-  ##############################################################
-  # 3. DEPLOY PLATFORM COMPONENTS
-  # Opens its own SSH tunnel — tunnels do not persist across jobs.
-  #
-  # FIX 1: helm_deploy.sh now accepts an optional timeout argument.
-  #         Keycloak passes --timeout 8m; all others use the default 5m.
-  # FIX 2: yq download uses linux_amd64 (GitHub runners are x86_64).
-  #         Your OCI instance is ARM64 but the GitHub runner is NOT.
-  # FIX 3: Helm is installed here via azure/setup-helm. Each job that
-  #         needs helm installs it independently — it does not persist.
-  ##############################################################
-  deploy-platform:
-    name: Deploy Platform Components
-    runs-on: ubuntu-latest
-    needs: [changes, setup-kubeconfig, deploy-infrastructure]
-    if: |
-      always() &&
-      needs.changes.outputs.platform == 'true' &&
-      needs.setup-kubeconfig.result == 'success' &&
-      (needs.deploy-infrastructure.result == 'success' ||
-       needs.deploy-infrastructure.result == 'skipped')
-    environment:
-      name: lab
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig
-          path: ~/.kube
-
-      - name: Write SSH private key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
-          chmod 600 ~/.ssh/oci_key
-
-      - name: Add OCI host to known_hosts
-        run: |
-          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
-        run: |
-          ssh -i ~/.ssh/oci_key \
-              -o StrictHostKeyChecking=no \
-              -o ServerAliveInterval=30 \
-              -o ServerAliveCountMax=3 \
-              -o ExitOnForwardFailure=yes \
-              -L 6443:127.0.0.1:6443 \
-              -N -f \
-              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
-
-      - name: Wait for tunnel to be ready
-        run: |
-          for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 6443 2>/dev/null; then
-              echo "SSH tunnel is up (attempt $i)"
-              exit 0
-            fi
-            echo "Waiting for tunnel... ($i/15)"
-            sleep 2
-          done
-          echo "ERROR: SSH tunnel did not come up in time" >&2
-          exit 1
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: "v3.17.0"
-
-      - name: Install yq
-        run: |
-          # yq_linux_amd64 — GitHub Actions runners are x86_64 (NOT ARM64).
-          # Your k3s OCI instance is ARM64 but the runner that executes this
-          # workflow is GitHub's standard ubuntu-latest (x86_64).
-          wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
-          chmod +x /usr/local/bin/yq
-          yq --version
-
-      - name: Add Helm repos
-        # cert-manager + envoy-gateway use OCI registries — no repo add needed
-        run: |
-          helm repo add hashicorp    https://helm.releases.hashicorp.com
-          helm repo add bitnami      https://charts.bitnami.com/bitnami
-          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
-          helm repo update
-
-      - name: Apply namespace manifests for present components
-        run: |
-          chmod 600 ~/.kube/config
-          for dir in \
-            helm/platform/cert-manager \
-            helm/platform/envoy-gateway \
-            helm/platform/vault \
-            helm/platform/keycloak \
-            helm/platform/oauth2-proxy; do
-            if [ -d "$dir" ] && [ -f "$dir/namespace.yaml" ]; then
-              echo "==> Applying namespace: $dir/namespace.yaml"
-              kubectl apply -f "$dir/namespace.yaml"
-            fi
-          done
-
-      - name: Write deploy helper script
-        run: |
-          # Usage: /tmp/helm_deploy.sh <component-dir> [--timeout Xm] [extra --set flags]
-          # Reads chart_oci, version, release_name, namespace from helmrelease.yaml.
-          # Optional --timeout argument overrides the default 5m (use 8m for keycloak).
-          cat > /tmp/helm_deploy.sh << 'SCRIPT'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          DIR="$1"; shift
-          HELMRELEASE="$DIR/helmrelease.yaml"
-          VALUES="$DIR/values.yaml"
-          if [ ! -f "$HELMRELEASE" ]; then
-            echo "ERROR: $HELMRELEASE not found" >&2
-            exit 1
-          fi
-          CHART_OCI=$(yq '.chart_oci'    "$HELMRELEASE")
-          VERSION=$(yq '.version'        "$HELMRELEASE")
-          RELEASE=$(yq '.release_name'   "$HELMRELEASE")
-          NAMESPACE=$(yq '.namespace'    "$HELMRELEASE")
-          # Parse optional --timeout override from remaining args
-          TIMEOUT="5m"
-          EXTRA_ARGS=()
-          while [[ $# -gt 0 ]]; do
-            if [[ "$1" == "--timeout" ]]; then
-              TIMEOUT="$2"; shift 2
-            else
-              EXTRA_ARGS+=("$1"); shift
-            fi
-          done
-          echo "==> Deploying  : $RELEASE"
-          echo "    chart      : $CHART_OCI"
-          echo "    version    : $VERSION"
-          echo "    namespace  : $NAMESPACE"
-          echo "    timeout    : $TIMEOUT"
-          helm upgrade --install "$RELEASE" "$CHART_OCI" \
-            --version "$VERSION" \
-            --namespace "$NAMESPACE" \
-            --create-namespace \
-            -f "$VALUES" \
-            --atomic \
-            --timeout "$TIMEOUT" \
-            "${EXTRA_ARGS[@]}"
-          echo "==> $RELEASE deployed successfully"
-          SCRIPT
-          chmod +x /tmp/helm_deploy.sh
-
-      # ── 3a. cert-manager ────────────────────────────────────────────────────
-      - name: Deploy cert-manager
-        if: needs.changes.outputs.has_cert_manager == 'true'
-        run: |
-          /tmp/helm_deploy.sh helm/platform/cert-manager \
-            --set crds.enabled=true
-          kubectl get pods -n cert-manager
-
-      - name: Uninstall cert-manager
-        if: needs.changes.outputs.has_cert_manager == 'false'
-        run: |
-          if helm status cert-manager -n cert-manager &>/dev/null; then
-            echo "==> Uninstalling cert-manager"
-            helm uninstall cert-manager -n cert-manager --wait
-            kubectl delete namespace cert-manager --ignore-not-found
-          else
-            echo "==> cert-manager not installed — nothing to remove"
-          fi
-
-      # ── 3b. envoy-gateway ───────────────────────────────────────────────────
-      - name: Deploy Envoy Gateway
-        if: needs.changes.outputs.has_envoy_gateway == 'true'
-        run: |
-          /tmp/helm_deploy.sh helm/platform/envoy-gateway
-          kubectl get pods -n envoy-gateway-system
-
-      - name: Uninstall Envoy Gateway
-        if: needs.changes.outputs.has_envoy_gateway == 'false'
-        run: |
-          if helm status envoy-gateway -n envoy-gateway-system &>/dev/null; then
-            helm uninstall envoy-gateway -n envoy-gateway-system --wait
-            kubectl delete namespace envoy-gateway-system --ignore-not-found
-          else
-            echo "==> Envoy Gateway not installed — nothing to remove"
-          fi
-
-      # ── 3c. vault ───────────────────────────────────────────────────────────
-      - name: Deploy Vault
-        if: needs.changes.outputs.has_vault == 'true'
-        run: |
-          /tmp/helm_deploy.sh helm/platform/vault
-          kubectl get pods -n vault
-
-      - name: Uninstall Vault
-        if: needs.changes.outputs.has_vault == 'false'
-        run: |
-          if helm status vault -n vault &>/dev/null; then
-            helm uninstall vault -n vault --wait
-            kubectl delete namespace vault --ignore-not-found
-          else
-            echo "==> Vault not installed — nothing to remove"
-          fi
-
-      # ── 3d. keycloak ────────────────────────────────────────────────────────
-      # FIX: passes --timeout 8m because Keycloak + PostgreSQL take longer to
-      # initialise than the default 5m used by all other components.
-      - name: Deploy Keycloak
-        if: needs.changes.outputs.has_keycloak == 'true'
-        run: |
-          /tmp/helm_deploy.sh helm/platform/keycloak \
-            --timeout 8m \
-            --set auth.adminPassword="${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}" \
-            --set postgresql.auth.password="${{ secrets.KEYCLOAK_DB_PASSWORD }}"
-          kubectl get pods -n keycloak
-
-      - name: Uninstall Keycloak
-        if: needs.changes.outputs.has_keycloak == 'false'
-        run: |
-          if helm status keycloak -n keycloak &>/dev/null; then
-            helm uninstall keycloak -n keycloak --wait
-            kubectl delete namespace keycloak --ignore-not-found
-          else
-            echo "==> Keycloak not installed — nothing to remove"
-          fi
-
-      # ── 3e. oauth2-proxy ────────────────────────────────────────────────────
-      - name: Deploy oauth2-proxy
-        if: needs.changes.outputs.has_oauth2_proxy == 'true'
-        run: |
-          /tmp/helm_deploy.sh helm/platform/oauth2-proxy \
-            --set config.clientSecret="${{ secrets.OAUTH2_PROXY_CLIENT_SECRET }}" \
-            --set config.cookieSecret="${{ secrets.OAUTH2_PROXY_COOKIE_SECRET }}"
-          kubectl get pods -n oauth2-proxy
-
-      - name: Uninstall oauth2-proxy
-        if: needs.changes.outputs.has_oauth2_proxy == 'false'
-        run: |
-          if helm status oauth2-proxy -n oauth2-proxy &>/dev/null; then
-            helm uninstall oauth2-proxy -n oauth2-proxy --wait
-            kubectl delete namespace oauth2-proxy --ignore-not-found
-          else
-            echo "==> oauth2-proxy not installed — nothing to remove"
-          fi
-
-  ################################################################
-  # 3.5. DEPLOY CERT CONFIG (ClusterIssuers + Gateway bootstrap cert)
-  # Must run after deploy-platform -- cert-manager CRDs must exist
-  # before ClusterIssuer and Certificate resources can be applied.
-  # --prune scoped to part-of=cert-config removes deleted files from cluster.
-  ###############################################################
-  deploy-cert-config:
-    name: Deploy Cert Config
-    runs-on: ubuntu-latest
-    needs: [changes, setup-kubeconfig, deploy-platform]
-    if: |
-      always() &&
-      needs.changes.outputs.has_cert_config == 'true' &&
-      needs.changes.outputs.any_changed == 'true' &&
-      needs.setup-kubeconfig.result == 'success' &&
-      needs.deploy-platform.result == 'success'
-    environment:
-      name: lab
-    steps:
-      - uses: actions/checkout@v4
-  
-      - uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig
-          path: ~/.kube
-      
-      - name: Write SSH Private Key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
-          chmod 600 ~/.ssh/oci_key
-
-      - name: Add OCI host to known_hosts
-        run: |
-          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
-        run: |
-          ssh -i ~/.ssh/oci_key \
-            -o StrictHostKeyChecking=no \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=3 \
-            -o ExitOnForwardFailure=yes \
-            -L 6443:127.0.0.1:6443 \
-            -N -f \
-            "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
-
-      - name: Wait for tunnel to be ready
-        run: |
-          for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 6443 2>/dev/null; then
-              echo "SSH tunnel is up (attempt $i)"
-              exit 0
-            fi
-            echo "Waiting for tunnel... ($i/15)"
-            sleep 5
-          done
-          echo "ERROR: SSH tunnel failed to open in time" >&2
-          exit 1
-          
-      - name: Wait for cert-manager webhook to be ready
-        run: |
-          chmod 600 ~/.kube/config
-          kubectl rollout status deployment/cert-manager-webhook \
-            -n cert-manager --timeout=120s
-
-      - name: Apply cert config manifests
-        run: |
-          kubectl apply -f helm/infrastructure/cert-config/ \
-            --prune \
-            -l app.kubernetes.io/part-of=cert-config
-
-      - name: Show issuer and certificate status
-        run: |
-          echo "-- ClusterIssuers --"
-          kubectl get clusterIssuer -o wide
-          echo "-- Certificates --"
-          kubectl get certificate -n envoy-gateway-system -o wide
-          echo "-- Certificate Events"
-          kubectl describe certificate gateway-default-tls \
-            -n envoy-gateway-system 2>/dev/null | tail -n 20 || true
-  ##############################################################
-  # 4. DEPLOY APPLICATIONS
-  # Opens its own SSH tunnel — tunnels do not persist across jobs.
-  ##############################################################
-  deploy-applications:
-    name: Deploy Applications
-    runs-on: ubuntu-latest
-    needs: [changes, setup-kubeconfig, deploy-platform, deploy-cert-config]
-    if: |
-      always() &&
-      needs.changes.outputs.applications == 'true' &&
-      needs.setup-kubeconfig.result == 'success' &&
-      (needs.deploy-platform.result == 'success' ||
-       needs.deploy-platform.result == 'skipped') &&
-      (needs.deploy-cert-config.result == 'success' ||
-       needs.deploy-cert-config.result == 'skipped')
-    environment:
-      name: lab
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig
-          path: ~/.kube
-
-      - name: Write SSH private key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
-          chmod 600 ~/.ssh/oci_key
-
-      - name: Add OCI host to known_hosts
-        run: |
-          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
-        run: |
-          ssh -i ~/.ssh/oci_key \
-              -o StrictHostKeyChecking=no \
-              -o ServerAliveInterval=30 \
-              -o ServerAliveCountMax=3 \
-              -o ExitOnForwardFailure=yes \
-              -L 6443:127.0.0.1:6443 \
-              -N -f \
-              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
-
-      - name: Wait for tunnel to be ready
-        run: |
-          for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 6443 2>/dev/null; then
-              echo "SSH tunnel is up (attempt $i)"
-              exit 0
-            fi
-            echo "Waiting for tunnel... ($i/15)"
-            sleep 2
-          done
-          echo "ERROR: SSH tunnel did not come up in time" >&2
-          exit 1
-
-      - name: Deploy present applications
-        run: |
-          chmod 600 ~/.kube/config
-          shopt -s nullglob
-          for dir in helm/applications/*/; do
-            [ -d "$dir" ] || continue
-            app=$(basename "$dir")
-            echo "==> Processing application: $app"
-            for f in "$dir"namespace.yaml "$dir"httproute.yaml; do
-              [ -f "$f" ] && kubectl apply -f "$f" && echo "    applied: $f"
-            done
-          done
-
-  ##############################################################
-  # 5. HEALTH CHECK
-  # Opens its own SSH tunnel — tunnels do not persist across jobs.
-  # Only runs when setup-kubeconfig succeeded (kubeconfig artifact exists).
-  ##############################################################
-  health-check:
-    name: Cluster Health Check
-    runs-on: ubuntu-latest
-    needs: [changes, setup-kubeconfig, deploy-platform, deploy-cert-config, deploy-applications]
-    if: |
-      always() &&
-      needs.setup-kubeconfig.result == 'success'
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig
-          path: ~/.kube
-
-      - name: Write SSH private key
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
-          chmod 600 ~/.ssh/oci_key
-
-      - name: Add OCI host to known_hosts
-        run: |
-          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
-        run: |
-          ssh -i ~/.ssh/oci_key \
-              -o StrictHostKeyChecking=no \
-              -o ServerAliveInterval=30 \
-              -o ServerAliveCountMax=3 \
-              -o ExitOnForwardFailure=yes \
-              -L 6443:127.0.0.1:6443 \
-              -N -f \
-              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
-
-      - name: Wait for tunnel to be ready
-        run: |
-          for i in $(seq 1 15); do
-            if nc -z 127.0.0.1 6443 2>/dev/null; then
-              echo "SSH tunnel is up (attempt $i)"
-              exit 0
-            fi
-            echo "Waiting for tunnel... ($i/15)"
-            sleep 2
-          done
-          echo "ERROR: SSH tunnel did not come up in time" >&2
-          exit 1
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: "v3.17.0"
-
-      - name: Platform and cluster status
-        run: |
-          chmod 600 ~/.kube/config
-          echo "════════════════════════════════════"
-          echo " NODES"
-          echo "════════════════════════════════════"
-          kubectl get nodes -o wide
-          echo ""
-          echo "════════════════════════════════════"
-          echo " HELM RELEASES (all namespaces)"
-          echo "════════════════════════════════════"
-          helm list -A
-          echo ""
-          echo "════════════════════════════════════"
-          echo " PLATFORM PODS"
-          echo "════════════════════════════════════"
-          for ns in cert-manager envoy-gateway-system vault keycloak oauth2-proxy; do
-            echo ""
-            echo "── $ns ──"
-            kubectl get pods -n "$ns" 2>/dev/null || echo "(namespace not present)"
-          done
-          echo ""
-          echo "════════════════════════════════════"
-          echo " GATEWAY STATUS"
-          echo "════════════════════════════════════"
-          kubectl get gatewayclass 2>/dev/null || echo "(no gatewayclasses)"
-          kubectl get gateway -A 2>/dev/null || echo "(no gateways)"
-          echo ""
-          echo "════════════════════════════════════"
-          echo " CERT-MANAGER CRDs"
-          echo "════════════════════════════════════"
-          kubectl get crds 2>/dev/null | grep cert-manager.io || echo "(no cert-manager CRDs)"
-          echo ""
-          echo "════════════════════════════════════"
-          echo " CLUSTERISSUERS"
-          echo "════════════════════════════════════"
-          kubectl get clusterissuer -o wide 2>/dev/null || echo "(none)"
-          echo ""
-          echo "════════════════════════════════════"
-          echo " CERTIFICATES (all namespaces)"
-          echo "════════════════════════════════════"
-          kubectl get certificate -A 2>/dev/null || echo "(none)"
 </file>
 
 <file path="ansible/roles/k3s/tasks/main.yaml">
@@ -3299,6 +2589,775 @@ jobs:
             --syntax-check
 </file>
 
+<file path=".github/workflows/helm-cd.yaml">
+---
+name: Helm CD
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "helm/**"
+      - ".github/workflows/helm-cd.yaml"
+  workflow_dispatch:
+# ── PRESENCE-BASED DEPLOYMENT ─────────────────────────────────────────────────
+# Install  : create helm/platform/<component>/ folder → merge to main
+# Upgrade  : edit values.yaml OR helmrelease.yaml → merge to main
+# Uninstall: delete helm/platform/<component>/ folder → merge to main
+#
+# helm-cd.yaml reads chart_oci, version, release_name, namespace
+# from each component's helmrelease.yaml — nothing is hardcoded here.
+# To upgrade a component: only edit its helmrelease.yaml version field.
+#
+# DEPLOY ORDER (mandatory):
+#   cert-manager → envoy-gateway → vault → keycloak → oauth2-proxy
+#
+# SSH TUNNEL PATTERN:
+#   Each job that calls kubectl or helm must:
+#   1. Write the SSH private key to disk
+#   2. Open an SSH tunnel: localhost:6443 → OCI_INSTANCE_IP:6443
+#   3. Wait for the tunnel to be ready
+#   4. Use the kubeconfig that points to 127.0.0.1:6443 (not the public IP)
+#   The tunnel does NOT persist across jobs — every job that needs cluster
+#   access must open its own tunnel and tear it down at the end.
+#   This avoids exposing port 6443 publicly on the OCI instance.
+jobs:
+  ##############################################################
+  # 0. DETECT CHANGES + COMPONENT PRESENCE
+  ##############################################################
+  changes:
+    name: Detect Changes and Component Presence
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+      applications: ${{ steps.filter.outputs.applications }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      any_changed: ${{ steps.filter.outputs.any_changed }}
+      has_cert_manager: ${{ steps.presence.outputs.has_cert_manager }}
+      has_envoy_gateway: ${{ steps.presence.outputs.has_envoy_gateway }}
+      has_vault: ${{ steps.presence.outputs.has_vault }}
+      has_keycloak: ${{ steps.presence.outputs.has_keycloak }}
+      has_oauth2_proxy: ${{ steps.presence.outputs.has_oauth2_proxy }}
+      has_cert_config: ${{ steps.presence.outputs.has_cert_config }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Detect which layers changed
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "platform=true"       >> $GITHUB_OUTPUT
+            echo "applications=true"   >> $GITHUB_OUTPUT
+            echo "infrastructure=true" >> $GITHUB_OUTPUT
+            echo "any_changed=true"    >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only HEAD^ HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+          HAS_PLATFORM=$(echo "$CHANGED" | grep -q '^helm/platform/'      && echo true || echo false)
+          HAS_APPS=$(echo "$CHANGED"     | grep -q '^helm/applications/'  && echo true || echo false)
+          HAS_INFRA=$(echo "$CHANGED"    | grep -q '^helm/infrastructure/' && echo true || echo false)
+          echo "platform=$HAS_PLATFORM"    >> $GITHUB_OUTPUT
+          echo "applications=$HAS_APPS"    >> $GITHUB_OUTPUT
+          echo "infrastructure=$HAS_INFRA" >> $GITHUB_OUTPUT
+          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
+            echo "any_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "any_changed=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Check which platform component folders are present
+        id: presence
+        run: |
+          echo "has_cert_manager=$([ -d helm/platform/cert-manager ]  && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_envoy_gateway=$([ -d helm/platform/envoy-gateway ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_vault=$([ -d helm/platform/vault ]                 && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_keycloak=$([ -d helm/platform/keycloak ]           && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_oauth2_proxy=$([ -d helm/platform/oauth2-proxy ]   && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_cert_config=$([ -d helm/infrastructure/cert-config ]  && echo true || echo false)" >> $GITHUB_OUTPUT
+  ##############################################################
+  # 1. SETUP KUBECONFIG + VERIFY CONNECTIVITY VIA SSH TUNNEL
+  # The kubeconfig stored in the KUBECONFIG secret must have:
+  #   server: https://127.0.0.1:6443
+  # (not the public OCI IP — the tunnel maps localhost:6443 → OCI:6443)
+  ##############################################################
+  setup-kubeconfig:
+    name: Setup Kubeconfig
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.any_changed == 'true'
+    steps:
+      - name: Write SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
+          chmod 600 ~/.ssh/oci_key
+
+      - name: Add OCI host to known_hosts (avoid interactive prompt)
+        run: |
+          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
+        run: |
+          ssh -i ~/.ssh/oci_key \
+              -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=3 \
+              -o ExitOnForwardFailure=yes \
+              -L 6443:127.0.0.1:6443 \
+              -N -f \
+              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
+
+      - name: Wait for tunnel to be ready
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "SSH tunnel is up (attempt $i)"
+              exit 0
+            fi
+            echo "Waiting for tunnel... ($i/15)"
+            sleep 2
+          done
+          echo "ERROR: SSH tunnel did not come up in time" >&2
+          exit 1
+
+      - name: Write kubeconfig from secret
+        run: |
+          mkdir -p ~/.kube
+          # printf '%s' preserves exact YAML structure from the secret value.
+          # IMPORTANT: The KUBECONFIG secret must have server: https://127.0.0.1:6443
+          # (not the public OCI IP). The SSH tunnel maps localhost:6443 to the cluster.
+          printf '%s' "${{ secrets.KUBECONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Verify cluster connectivity through tunnel
+        run: |
+          kubectl get nodes -o wide
+          echo "Cluster connection via SSH tunnel: OK"
+
+      - name: Upload kubeconfig artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube/config
+          retention-days: 1
+
+  ##############################################################
+  # 2. DEPLOY INFRASTRUCTURE
+  # Opens its own SSH tunnel — tunnels do not persist across jobs.
+  #
+  # PRUNING: kubectl apply --prune -l app.kubernetes.io/part-of=gateway-config
+  # ensures that when a file is removed from helm/infrastructure/gateway-config,
+  # the corresponding resource is deleted from the cluster.
+  # All resources in gateway-config/ must carry this label for pruning to work
+  ##############################################################
+  deploy-infrastructure:
+    name: Deploy Infrastructure Config
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig]
+    if: |
+      needs.changes.outputs.infrastructure == 'true' &&
+      needs.setup-kubeconfig.result == 'success'
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Write SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
+          chmod 600 ~/.ssh/oci_key
+
+      - name: Add OCI host to known_hosts
+        run: |
+          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
+        run: |
+          ssh -i ~/.ssh/oci_key \
+              -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=3 \
+              -o ExitOnForwardFailure=yes \
+              -L 6443:127.0.0.1:6443 \
+              -N -f \
+              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
+
+      - name: Wait for tunnel to be ready
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "SSH tunnel is up (attempt $i)"
+              exit 0
+            fi
+            echo "Waiting for tunnel... ($i/15)"
+            sleep 2
+          done
+          echo "ERROR: SSH tunnel did not come up in time" >&2
+          exit 1
+
+      - name: Apply gateway-config (GatewayClass, Gateway, HTTPRoutes)
+        run: |
+            chmod 600 ~/.kube/config
+            # Only runs if the folder exists (skips gracefully if not present yet)
+            if [ -d helm/infrastructure/gateway-config ]; then
+              kubectl apply -f helm/infrastructure/gateway-config/ \
+                --prune \
+                --selector app.kubernetes.io/part-of=gateway-config \
+                --prune-allowlist=gateway.networking.k8s.io/v1/GatewayClass \
+                --prune-allowlist=gateway.networking.k8s.io/v1/Gateway \
+                --prune-allowlist=gateway.networking.k8s.io/v1/HTTPRoute
+            else
+              echo "gateway-config folder not present — skipping"
+            fi
+
+      - name: Apply cert-config (ClusterIssuers, Certificates)
+        run: |
+            # Applied after gateway-config because ClusterIssuers reference
+            # lab-gateway for HTTP-01 challenge routing.
+            # Only runs if the folder exists.
+            if [ -d helm/infrastructure/cert-config ]; then
+              kubectl apply -f helm/infrastructure/cert-config/ \
+                --prune \
+                --selector app.kubernetes.io/part-of=cert-config \
+                --prune-allowlist=cert-manager.io/v1/ClusterIssuer \
+                --prune-allowlist=cert-manager.io/v1/Certificate
+            else
+              echo "cert-config folder not present — skipping"
+            fi
+
+      - name: Show infrastructure status
+        run: |
+            echo "════════════════════════════════════"
+            echo " GATEWAYCLASS"
+            echo "════════════════════════════════════"
+            kubectl get gatewayclass -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " GATEWAY"
+            echo "════════════════════════════════════"
+            kubectl get gateway -A -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " HTTPROUTES"
+            echo "════════════════════════════════════"
+            kubectl get httproute -A 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " CLUSTERISSUERS"
+            echo "════════════════════════════════════"
+            kubectl get clusterissuer -o wide 2>/dev/null || echo "(none)"
+            echo ""
+            echo "════════════════════════════════════"
+            echo " CERTIFICATES"
+            echo "════════════════════════════════════"
+            kubectl get certificate -A 2>/dev/null || echo "(none)"
+
+  ##############################################################
+  # 3. DEPLOY PLATFORM COMPONENTS
+  # Opens its own SSH tunnel — tunnels do not persist across jobs.
+  #
+  # FIX 1: helm_deploy.sh now accepts an optional timeout argument.
+  #         Keycloak passes --timeout 8m; all others use the default 5m.
+  # FIX 2: yq download uses linux_amd64 (GitHub runners are x86_64).
+  #         Your OCI instance is ARM64 but the GitHub runner is NOT.
+  # FIX 3: Helm is installed here via azure/setup-helm. Each job that
+  #         needs helm installs it independently — it does not persist.
+  ##############################################################
+  deploy-platform:
+    name: Deploy Platform Components
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-infrastructure]
+    if: |
+      always() &&
+      needs.changes.outputs.platform == 'true' &&
+      needs.setup-kubeconfig.result == 'success' &&
+      (needs.deploy-infrastructure.result == 'success' ||
+       needs.deploy-infrastructure.result == 'skipped')
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Write SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
+          chmod 600 ~/.ssh/oci_key
+
+      - name: Add OCI host to known_hosts
+        run: |
+          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
+        run: |
+          ssh -i ~/.ssh/oci_key \
+              -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=3 \
+              -o ExitOnForwardFailure=yes \
+              -L 6443:127.0.0.1:6443 \
+              -N -f \
+              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
+
+      - name: Wait for tunnel to be ready
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "SSH tunnel is up (attempt $i)"
+              exit 0
+            fi
+            echo "Waiting for tunnel... ($i/15)"
+            sleep 2
+          done
+          echo "ERROR: SSH tunnel did not come up in time" >&2
+          exit 1
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Install yq
+        run: |
+          # yq_linux_amd64 — GitHub Actions runners are x86_64 (NOT ARM64).
+          # Your k3s OCI instance is ARM64 but the runner that executes this
+          # workflow is GitHub's standard ubuntu-latest (x86_64).
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Add Helm repos
+        # cert-manager + envoy-gateway use OCI registries — no repo add needed
+        run: |
+          helm repo add hashicorp    https://helm.releases.hashicorp.com
+          helm repo add bitnami      https://charts.bitnami.com/bitnami
+          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
+          helm repo update
+
+      - name: Apply namespace manifests for present components
+        run: |
+          chmod 600 ~/.kube/config
+          for dir in \
+            helm/platform/cert-manager \
+            helm/platform/envoy-gateway \
+            helm/platform/vault \
+            helm/platform/keycloak \
+            helm/platform/oauth2-proxy; do
+            if [ -d "$dir" ] && [ -f "$dir/namespace.yaml" ]; then
+              echo "==> Applying namespace: $dir/namespace.yaml"
+              kubectl apply -f "$dir/namespace.yaml"
+            fi
+          done
+
+      - name: Write deploy helper script
+        run: |
+          # Usage: /tmp/helm_deploy.sh <component-dir> [--timeout Xm] [extra --set flags]
+          # Reads chart_oci, version, release_name, namespace from helmrelease.yaml.
+          # Optional --timeout argument overrides the default 5m (use 8m for keycloak).
+          cat > /tmp/helm_deploy.sh << 'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          DIR="$1"; shift
+          HELMRELEASE="$DIR/helmrelease.yaml"
+          VALUES="$DIR/values.yaml"
+          if [ ! -f "$HELMRELEASE" ]; then
+            echo "ERROR: $HELMRELEASE not found" >&2
+            exit 1
+          fi
+          CHART_OCI=$(yq '.chart_oci'    "$HELMRELEASE")
+          VERSION=$(yq '.version'        "$HELMRELEASE")
+          RELEASE=$(yq '.release_name'   "$HELMRELEASE")
+          NAMESPACE=$(yq '.namespace'    "$HELMRELEASE")
+          # Parse optional --timeout override from remaining args
+          TIMEOUT="5m"
+          EXTRA_ARGS=()
+          while [[ $# -gt 0 ]]; do
+            if [[ "$1" == "--timeout" ]]; then
+              TIMEOUT="$2"; shift 2
+            else
+              EXTRA_ARGS+=("$1"); shift
+            fi
+          done
+          echo "==> Deploying  : $RELEASE"
+          echo "    chart      : $CHART_OCI"
+          echo "    version    : $VERSION"
+          echo "    namespace  : $NAMESPACE"
+          echo "    timeout    : $TIMEOUT"
+          helm upgrade --install "$RELEASE" "$CHART_OCI" \
+            --version "$VERSION" \
+            --namespace "$NAMESPACE" \
+            --create-namespace \
+            -f "$VALUES" \
+            --atomic \
+            --timeout "$TIMEOUT" \
+            "${EXTRA_ARGS[@]}"
+          echo "==> $RELEASE deployed successfully"
+          SCRIPT
+          chmod +x /tmp/helm_deploy.sh
+
+      # ── 3a. cert-manager ────────────────────────────────────────────────────
+      - name: Deploy cert-manager
+        if: needs.changes.outputs.has_cert_manager == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/cert-manager \
+            --set crds.enabled=true
+          kubectl get pods -n cert-manager
+
+      - name: Uninstall cert-manager
+        if: needs.changes.outputs.has_cert_manager == 'false'
+        run: |
+          if helm status cert-manager -n cert-manager &>/dev/null; then
+            echo "==> Uninstalling cert-manager"
+            helm uninstall cert-manager -n cert-manager --wait
+            kubectl delete namespace cert-manager --ignore-not-found
+          else
+            echo "==> cert-manager not installed — nothing to remove"
+          fi
+
+      # ── 3b. envoy-gateway ───────────────────────────────────────────────────
+      - name: Deploy Envoy Gateway
+        if: needs.changes.outputs.has_envoy_gateway == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/envoy-gateway
+          kubectl get pods -n envoy-gateway-system
+
+      - name: Uninstall Envoy Gateway
+        if: needs.changes.outputs.has_envoy_gateway == 'false'
+        run: |
+          if helm status envoy-gateway -n envoy-gateway-system &>/dev/null; then
+            helm uninstall envoy-gateway -n envoy-gateway-system --wait
+            kubectl delete namespace envoy-gateway-system --ignore-not-found
+          else
+            echo "==> Envoy Gateway not installed — nothing to remove"
+          fi
+
+      # ── 3c. vault ───────────────────────────────────────────────────────────
+      - name: Deploy Vault
+        if: needs.changes.outputs.has_vault == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/vault
+          kubectl get pods -n vault
+
+      - name: Uninstall Vault
+        if: needs.changes.outputs.has_vault == 'false'
+        run: |
+          if helm status vault -n vault &>/dev/null; then
+            helm uninstall vault -n vault --wait
+            kubectl delete namespace vault --ignore-not-found
+          else
+            echo "==> Vault not installed — nothing to remove"
+          fi
+
+      # ── 3d. keycloak ────────────────────────────────────────────────────────
+      # FIX: passes --timeout 8m because Keycloak + PostgreSQL take longer to
+      # initialise than the default 5m used by all other components.
+      - name: Deploy Keycloak
+        if: needs.changes.outputs.has_keycloak == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/keycloak \
+            --timeout 8m \
+            --set auth.adminPassword="${{ secrets.KEYCLOAK_ADMIN_PASSWORD }}" \
+            --set postgresql.auth.password="${{ secrets.KEYCLOAK_DB_PASSWORD }}"
+          kubectl get pods -n keycloak
+
+      - name: Uninstall Keycloak
+        if: needs.changes.outputs.has_keycloak == 'false'
+        run: |
+          if helm status keycloak -n keycloak &>/dev/null; then
+            helm uninstall keycloak -n keycloak --wait
+            kubectl delete namespace keycloak --ignore-not-found
+          else
+            echo "==> Keycloak not installed — nothing to remove"
+          fi
+
+      # ── 3e. oauth2-proxy ────────────────────────────────────────────────────
+      - name: Deploy oauth2-proxy
+        if: needs.changes.outputs.has_oauth2_proxy == 'true'
+        run: |
+          /tmp/helm_deploy.sh helm/platform/oauth2-proxy \
+            --set config.clientSecret="${{ secrets.OAUTH2_PROXY_CLIENT_SECRET }}" \
+            --set config.cookieSecret="${{ secrets.OAUTH2_PROXY_COOKIE_SECRET }}"
+          kubectl get pods -n oauth2-proxy
+
+      - name: Uninstall oauth2-proxy
+        if: needs.changes.outputs.has_oauth2_proxy == 'false'
+        run: |
+          if helm status oauth2-proxy -n oauth2-proxy &>/dev/null; then
+            helm uninstall oauth2-proxy -n oauth2-proxy --wait
+            kubectl delete namespace oauth2-proxy --ignore-not-found
+          else
+            echo "==> oauth2-proxy not installed — nothing to remove"
+          fi
+
+  ################################################################
+  # 3.5. DEPLOY CERT CONFIG (ClusterIssuers + Gateway bootstrap cert)
+  # Must run after deploy-platform -- cert-manager CRDs must exist
+  # before ClusterIssuer and Certificate resources can be applied.
+  # --prune scoped to part-of=cert-config removes deleted files from cluster.
+  ###############################################################
+  deploy-cert-config:
+    name: Deploy Cert Config
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-platform]
+    if: |
+      always() &&
+      needs.changes.outputs.has_cert_config == 'true' &&
+      needs.changes.outputs.any_changed == 'true' &&
+      needs.setup-kubeconfig.result == 'success' &&
+      needs.deploy-platform.result == 'success'
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Write SSH Private Key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
+          chmod 600 ~/.ssh/oci_key
+
+      - name: Add OCI host to known_hosts
+        run: |
+          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
+        run: |
+          ssh -i ~/.ssh/oci_key \
+            -o StrictHostKeyChecking=no \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -o ExitOnForwardFailure=yes \
+            -L 6443:127.0.0.1:6443 \
+            -N -f \
+            "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
+
+      - name: Wait for tunnel to be ready
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "SSH tunnel is up (attempt $i)"
+              exit 0
+            fi
+            echo "Waiting for tunnel... ($i/15)"
+            sleep 5
+          done
+          echo "ERROR: SSH tunnel failed to open in time" >&2
+          exit 1
+
+      - name: Wait for cert-manager webhook to be ready
+        run: |
+          chmod 600 ~/.kube/config
+          kubectl rollout status deployment/cert-manager-webhook \
+            -n cert-manager --timeout=120s
+
+      - name: Apply cert config manifests
+        run: |
+          kubectl apply -f helm/infrastructure/cert-config/ \
+            --prune \
+            -l app.kubernetes.io/part-of=cert-config
+
+      - name: Show issuer and certificate status
+        run: |
+          echo "-- ClusterIssuers --"
+          kubectl get clusterIssuer -o wide
+          echo "-- Certificates --"
+          kubectl get certificate -n envoy-gateway-system -o wide
+          echo "-- Certificate Events"
+          kubectl describe certificate gateway-default-tls \
+            -n envoy-gateway-system 2>/dev/null | tail -n 20 || true
+  ##############################################################
+  # 4. DEPLOY APPLICATIONS
+  # Opens its own SSH tunnel — tunnels do not persist across jobs.
+  ##############################################################
+  deploy-applications:
+    name: Deploy Applications
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-platform, deploy-cert-config]
+    if: |
+      always() &&
+      needs.changes.outputs.applications == 'true' &&
+      needs.setup-kubeconfig.result == 'success' &&
+      (needs.deploy-platform.result == 'success' ||
+       needs.deploy-platform.result == 'skipped') &&
+      (needs.deploy-cert-config.result == 'success' ||
+       needs.deploy-cert-config.result == 'skipped')
+    environment:
+      name: lab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Write SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
+          chmod 600 ~/.ssh/oci_key
+
+      - name: Add OCI host to known_hosts
+        run: |
+          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
+        run: |
+          ssh -i ~/.ssh/oci_key \
+              -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=3 \
+              -o ExitOnForwardFailure=yes \
+              -L 6443:127.0.0.1:6443 \
+              -N -f \
+              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
+
+      - name: Wait for tunnel to be ready
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "SSH tunnel is up (attempt $i)"
+              exit 0
+            fi
+            echo "Waiting for tunnel... ($i/15)"
+            sleep 2
+          done
+          echo "ERROR: SSH tunnel did not come up in time" >&2
+          exit 1
+
+      - name: Deploy present applications
+        run: |
+          chmod 600 ~/.kube/config
+          shopt -s nullglob
+          for dir in helm/applications/*/; do
+            [ -d "$dir" ] || continue
+            app=$(basename "$dir")
+            echo "==> Processing application: $app"
+            for f in "$dir"namespace.yaml "$dir"httproute.yaml; do
+              [ -f "$f" ] && kubectl apply -f "$f" && echo "    applied: $f"
+            done
+          done
+
+  ##############################################################
+  # 5. HEALTH CHECK
+  # Opens its own SSH tunnel — tunnels do not persist across jobs.
+  # Only runs when setup-kubeconfig succeeded (kubeconfig artifact exists).
+  ##############################################################
+  health-check:
+    name: Cluster Health Check
+    runs-on: ubuntu-latest
+    needs: [changes, setup-kubeconfig, deploy-platform, deploy-cert-config, deploy-applications]
+    if: |
+      always() &&
+      needs.setup-kubeconfig.result == 'success'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig
+          path: ~/.kube
+
+      - name: Write SSH private key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > ~/.ssh/oci_key
+          chmod 600 ~/.ssh/oci_key
+
+      - name: Add OCI host to known_hosts
+        run: |
+          ssh-keyscan -H "${{ secrets.OCI_INSTANCE_IP }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Open SSH tunnel (localhost:6443 → OCI:6443)
+        run: |
+          ssh -i ~/.ssh/oci_key \
+              -o StrictHostKeyChecking=no \
+              -o ServerAliveInterval=30 \
+              -o ServerAliveCountMax=3 \
+              -o ExitOnForwardFailure=yes \
+              -L 6443:127.0.0.1:6443 \
+              -N -f \
+              "${{ secrets.OCI_SSH_USER }}@${{ secrets.OCI_INSTANCE_IP }}"
+
+      - name: Wait for tunnel to be ready
+        run: |
+          for i in $(seq 1 15); do
+            if nc -z 127.0.0.1 6443 2>/dev/null; then
+              echo "SSH tunnel is up (attempt $i)"
+              exit 0
+            fi
+            echo "Waiting for tunnel... ($i/15)"
+            sleep 2
+          done
+          echo "ERROR: SSH tunnel did not come up in time" >&2
+          exit 1
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Platform and cluster status
+        run: |
+          chmod 600 ~/.kube/config
+          echo "════════════════════════════════════"
+          echo " NODES"
+          echo "════════════════════════════════════"
+          kubectl get nodes -o wide
+          echo ""
+          echo "════════════════════════════════════"
+          echo " HELM RELEASES (all namespaces)"
+          echo "════════════════════════════════════"
+          helm list -A
+          echo ""
+          echo "════════════════════════════════════"
+          echo " PLATFORM PODS"
+          echo "════════════════════════════════════"
+          for ns in cert-manager envoy-gateway-system vault keycloak oauth2-proxy; do
+            echo ""
+            echo "── $ns ──"
+            kubectl get pods -n "$ns" 2>/dev/null || echo "(namespace not present)"
+          done
+          echo ""
+          echo "════════════════════════════════════"
+          echo " GATEWAY STATUS"
+          echo "════════════════════════════════════"
+          kubectl get gatewayclass 2>/dev/null || echo "(no gatewayclasses)"
+          kubectl get gateway -A 2>/dev/null || echo "(no gateways)"
+          echo ""
+          echo "════════════════════════════════════"
+          echo " CERT-MANAGER CRDs"
+          echo "════════════════════════════════════"
+          kubectl get crds 2>/dev/null | grep cert-manager.io || echo "(no cert-manager CRDs)"
+          echo ""
+          echo "════════════════════════════════════"
+          echo " CLUSTERISSUERS"
+          echo "════════════════════════════════════"
+          kubectl get clusterissuer -o wide 2>/dev/null || echo "(none)"
+          echo ""
+          echo "════════════════════════════════════"
+          echo " CERTIFICATES (all namespaces)"
+          echo "════════════════════════════════════"
+          kubectl get certificate -A 2>/dev/null || echo "(none)"
+</file>
+
 <file path=".github/workflows/infrastructure-deploy.yaml">
 ---
 name: Infrastructure Deploy (CD)
@@ -3578,7 +3637,7 @@ jobs:
 
 <file path="repo_structure.txt">
 Folder PATH listing for volume Data
-Volume serial number is 000000FD C87A:83A4
+Volume serial number is 0000001A C87A:83A4
 D:.
 |   .gitignore
 |   .pre-commit-config.yaml
@@ -3644,6 +3703,10 @@ D:.
 |                   ssh.yml
 |                   sysctl.yml
 |                   
++---docs
+|   \---Test
+|           Test_prompts.txt
+|           
 +---helm
 |   +---applications
 |   +---infrastructure
