@@ -348,6 +348,24 @@ jobs:
           chmod +x /usr/local/bin/yq
           yq --version
 
+      - name: Render cert-manager chart for debugging
+        run: |
+          helm template cert-manager \
+            oci://quay.io/jetstack/charts/cert-manager \
+            --version v1.20.2 \
+            --namespace cert-manager \
+            -f helm/platform/cert-manager/values.yaml \
+            > /tmp/cert-manager-rendered.yaml
+
+          echo "=== ConfigMap ==="
+          grep -n -A40 -B10 "kind: ConfigMap" /tmp/cert-manager-rendered.yaml || true
+
+          echo "=== config.yaml references ==="
+          grep -n -A20 -B20 "config.yaml" /tmp/cert-manager-rendered.yaml || true
+
+          echo "=== controller args ==="
+          grep -n -A30 -B10 "cert-manager-controller" /tmp/cert-manager-rendered.yaml || true
+
       - name: Add Helm repos
         # cert-manager + envoy-gateway use OCI registries — no repo add needed
         run: |
