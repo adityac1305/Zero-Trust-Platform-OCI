@@ -36,9 +36,6 @@ featureGates: "ExperimentalGatewayAPISupport=true"
 #
 # Enabling this causes cert-manager to initialize its Gateway API integration
 # and allows the ACME HTTP-01 solver to create temporary HTTPRoutes.
-config:
-  gatewayAPI:
-    enabled: true
 
 # ── Controller (main cert-manager pod) ───────────────────────────────────────
 nodeSelector:
