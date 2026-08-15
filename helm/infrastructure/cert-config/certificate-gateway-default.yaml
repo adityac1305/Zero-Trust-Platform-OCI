@@ -12,7 +12,7 @@ metadata:
 spec:
   secretName: gateway-default-tls
   issuerRef:
-    name: letsencrypt-staging             # <-- change to "letsencrypt-prod" after testing
+    name: letsencrypt-prod  # change to "letsencrypt-prod" after testing with letsencrypt-staging
     kind: ClusterIssuer
   commonName: "ac1305-lab.duckdns.org"
   dnsNames:
