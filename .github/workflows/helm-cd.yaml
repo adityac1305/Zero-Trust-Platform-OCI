@@ -428,6 +428,7 @@ jobs:
             --namespace "$NAMESPACE" \
             --create-namespace \
             -f "$VALUES" \
+            --atomic \
             --timeout "$TIMEOUT" \
             "${EXTRA_ARGS[@]}"
           echo "==> $RELEASE deployed successfully"
