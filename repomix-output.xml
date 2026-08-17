@@ -145,6 +145,381 @@ repo_structure.txt
 <files>
 This section contains the contents of the repository's files.
 
+<file path="ansible/inventories/lab/hosts.ini">
+[k3s]
+141.148.11.46 ansible_user=ubuntu
+</file>
+
+<file path="ansible/ansible.cfg">
+[defaults]
+inventory = inventories/lab/hosts.ini
+roles_path = roles
+host_key_checking = True
+retry_files_enabled = False
+interpreter_python = auto_silent
+
+[privilege_escalation]
+become = True
+become_method = sudo
+</file>
+
+<file path="opentofu/environments/lab/.terraform.lock.hcl">
+# This file is maintained automatically by "tofu init".
+# Manual edits may be lost in future updates.
+
+provider "registry.opentofu.org/oracle/oci" {
+  version     = "8.15.0"
+  constraints = ">= 5.0.0"
+  hashes = [
+    "h1:bVSQnQ88043k9MAtw/p7r8FyUhEQ+B6jr9fEZm7uvuw=",
+    "zh:0b361333d9cf9580d0fa2151935dd56d0ae9c6a4f6051331e9b83e16b0019055",
+    "zh:0ca5bc477cae96ce60b4bc434d0cad5e6f1ff6db2d86bed90de5be431f527c22",
+    "zh:138b6d7b73602b59c1c4c372781c5a722f31881980206e808e29e56e21240bef",
+    "zh:1d995facf60387b9915a2100f83c4dfb724edeb17f7e968fc96273b868ff8f99",
+    "zh:426a002c331dfe7d3f983624f8726bf1c0c64365e9b993c8a49a7be81b59dd3a",
+    "zh:4b5b8a1c85dbf4d4866a7c069ed7d1dcfa5d05ddd8434a029085368fedfe5962",
+    "zh:547c25f3a46ccdafb81e4a94cb9e1df0ee1ab9a84b1378f81d47a327be8cf0a4",
+    "zh:9831901a5d2347df63e3ba9871ad9b631786fc2eda2d55701f0e52905f5ceddf",
+    "zh:9b12af85486a96aedd8d7984b0ff811a4b42e3d88dad1a3fb4c0b580d04fa425",
+    "zh:9c5a57811ceee85cfd6e729806163c5bbf3debaeb3b8da6c720d2334a2a56790",
+    "zh:b2d755282b039a5be5f0d9f8b276609ac27f82fcdbeee2fa8db3c2c3c98c3429",
+    "zh:c354fba643057e1a6f451b1dc78e4b158cac944fe6886f3105abf272bd596f11",
+    "zh:d21beb8541d20e737fac937eba66b46563a0acb0135b21c8dc3c13b73c7bc2ae",
+    "zh:e9c08a20a277016beb79115a235ddc2d384f0a85d7d074b1b436ffaf2e719aeb",
+    "zh:fecdca5e5f242650f4331688d274cc24504336e16be48139f400e0670e13aea1",
+  ]
+}
+</file>
+
+<file path="opentofu/environments/lab/outputs.tf">
+output "instance_id" {
+  value = oci_core_instance.vm.id
+}
+
+output "private_ip" {
+  value = oci_core_instance.vm.private_ip
+}
+
+output "public_ip" {
+  value = oci_core_public_ip.reserved_ip.ip_address
+}
+
+output "vcn_id" {
+  value = oci_core_vcn.lab_vcn.id
+}
+</file>
+
+<file path="opentofu/environments/lab/providers.tf">
+provider "oci" {
+  tenancy_ocid     = var.tenancy_ocid
+  user_ocid        = var.user_ocid
+  fingerprint      = var.fingerprint
+  private_key_path = var.private_key_path
+  region           = var.region
+}
+</file>
+
+<file path="opentofu/environments/lab/variables.tf">
+variable "tenancy_ocid" {
+  type        = string
+  description = "The tenancy OCID"
+}
+
+variable "user_ocid" {
+  type        = string
+  description = "The user OCID"
+}
+
+variable "fingerprint" {
+  type        = string
+  description = "The key fingerprint"
+}
+
+variable "private_key_path" {
+  type        = string
+  description = "Path to the private key"
+}
+
+variable "region" {
+  type        = string
+  description = "The OCI region"
+}
+
+variable "compartment_ocid" {
+  type        = string
+  description = "The compartment OCID where resources will be created"
+}
+
+variable "vcn_cidr" {
+  type        = string
+  default     = "10.0.0.0/16"
+  description = "CIDR block for the VCN"
+}
+
+variable "subnet_cidr" {
+  type        = string
+  default     = "10.0.0.0/24"
+  description = "CIDR block for the public subnet"
+}
+
+variable "ssh_public_key" {
+  type        = string
+  description = "Public SSH key for the compute instance"
+}
+</file>
+
+<file path="opentofu/environments/lab/versions.tf">
+terraform {
+  required_version = ">= 1.6.0"
+
+  required_providers {
+    oci = {
+      source  = "oracle/oci"
+      version = ">= 5.0.0"
+    }
+  }
+}
+</file>
+
+<file path="opentofu/scripts/apply.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu apply "${ENVIRONMENT}.tfplan"
+</file>
+
+<file path="opentofu/scripts/destroy.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+cd "opentofu/environments/${ENVIRONMENT}"
+
+tofu destroy
+</file>
+
+<file path="opentofu/scripts/retry-apply.sh">
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ENVIRONMENT=${1:-lab}
+
+while true; do
+  echo "======================================"
+  echo "Running tofu apply at $(date)"
+  echo "======================================"
+
+  cd "opentofu/environments/${ENVIRONMENT}"
+
+  tofu apply -auto-approve "${ENVIRONMENT}.tfplan" && break
+
+  echo ""
+  echo "Apply failed. Retrying in 5 minutes..."
+  echo ""
+
+  cd ../../..
+
+  sleep 300
+done
+
+echo ""
+echo "Infrastructure applied successfully."
+</file>
+
+<file path=".gitignore">
+########################################
+# Terraform / OpenTofu State
+########################################
+
+*.tfstate
+*.tfstate.*
+terraform.tfstate
+terraform.tfstate.backup
+
+*.tfplan
+*.tfplan.*
+
+.tofu/
+.terraform/
+**/.terraform/
+**/.tofu/
+
+# Terraform override files (from gitignore 1)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+########################################
+# Terraform / OpenTofu Variables
+########################################
+
+*.tfvars
+*.tfvars.json
+
+!example.tfvars
+!*.example.tfvars
+
+########################################
+# OCI Credentials
+########################################
+
+*.oci
+oci_api_key*
+.oci/
+
+########################################
+# SSH Keys (NEVER COMMIT)
+########################################
+
+*.pem
+*.key
+*.pub
+*.p12
+*.pfx
+
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+########################################
+# Environment Files
+########################################
+
+.env
+.env.*
+!.env.example
+
+########################################
+# Kubernetes / Kubeconfig
+########################################
+
+.kube/
+*.kubeconfig
+
+# Kubernetes secret patterns (from gitignore 1)
+secret.yaml
+secrets.yaml
+*-secret.yaml
+
+########################################
+# Ansible
+########################################
+
+*.retry
+vault_password*
+*.vault
+
+########################################
+# Logs
+########################################
+
+*.log
+logs/
+
+crash.log
+crash.*.log
+
+########################################
+# Python / Ansible runtime
+########################################
+
+__pycache__/
+*.pyc
+*.pyc
+*.pyo
+*.pyd
+*.so
+
+########################################
+# Virtual environments (from gitignore 1)
+########################################
+
+venv/
+.venv/
+env/
+ENV/
+
+########################################
+# Build artifacts (from gitignore 1)
+########################################
+
+build/
+dist/
+*.egg-info/
+
+########################################
+# Node (future-proof from gitignore 1)
+########################################
+
+node_modules/
+
+########################################
+# VS Code / IDE
+########################################
+
+.vscode/
+.idea/
+
+########################################
+# OS Files
+########################################
+
+.DS_Store
+Thumbs.db
+
+########################################
+# Temporary / Backup Files
+########################################
+
+*.bak
+*.swp
+*.tmp
+*.temp
+*~
+
+########################################
+# Draw.io backups (from gitignore 1)
+########################################
+
+*.drawio.bak
+*.drawio.backup
+*.backup
+
+########################################
+# Vault / Secrets (from gitignore 1)
+########################################
+
+.vault-token
+vault-init.txt
+unseal-keys.txt
+vault-keys.json
+vault-root-token.txt
+
+########################################
+# Docker / Containers (from gitignore 1)
+########################################
+
+docker-data/
+*.pid
+*.sock
+</file>
+
+<file path="ansible/inventories/lab/group_vars/all.yml">
+---
+
+ansible_python_interpreter: /usr/bin/python3
+</file>
+
 <file path="ansible/roles/k3s/templates/config.yaml.j2">
 write-kubeconfig-mode: "0644"
 
@@ -165,6 +540,13 @@ kubelet-arg:
   - max-pods={{ k3s_config.kubelet.max_pods }}
   - container-log-max-size={{ k3s_config.kubelet.container_log_max_size }}
   - container-log-max-files={{ k3s_config.kubelet.container_log_max_files }}
+</file>
+
+<file path="ansible/requirements.yml">
+---
+collections:
+  - name: community.general
+  - name: ansible.posix
 </file>
 
 <file path="helm/infrastructure/gateway-config/gatewayclass.yaml">
@@ -456,125 +838,7 @@ variable "bucket_name" {
 }
 </file>
 
-<file path="opentofu/environments/lab/.terraform.lock.hcl">
-# This file is maintained automatically by "tofu init".
-# Manual edits may be lost in future updates.
-
-provider "registry.opentofu.org/oracle/oci" {
-  version     = "8.15.0"
-  constraints = ">= 5.0.0"
-  hashes = [
-    "h1:bVSQnQ88043k9MAtw/p7r8FyUhEQ+B6jr9fEZm7uvuw=",
-    "zh:0b361333d9cf9580d0fa2151935dd56d0ae9c6a4f6051331e9b83e16b0019055",
-    "zh:0ca5bc477cae96ce60b4bc434d0cad5e6f1ff6db2d86bed90de5be431f527c22",
-    "zh:138b6d7b73602b59c1c4c372781c5a722f31881980206e808e29e56e21240bef",
-    "zh:1d995facf60387b9915a2100f83c4dfb724edeb17f7e968fc96273b868ff8f99",
-    "zh:426a002c331dfe7d3f983624f8726bf1c0c64365e9b993c8a49a7be81b59dd3a",
-    "zh:4b5b8a1c85dbf4d4866a7c069ed7d1dcfa5d05ddd8434a029085368fedfe5962",
-    "zh:547c25f3a46ccdafb81e4a94cb9e1df0ee1ab9a84b1378f81d47a327be8cf0a4",
-    "zh:9831901a5d2347df63e3ba9871ad9b631786fc2eda2d55701f0e52905f5ceddf",
-    "zh:9b12af85486a96aedd8d7984b0ff811a4b42e3d88dad1a3fb4c0b580d04fa425",
-    "zh:9c5a57811ceee85cfd6e729806163c5bbf3debaeb3b8da6c720d2334a2a56790",
-    "zh:b2d755282b039a5be5f0d9f8b276609ac27f82fcdbeee2fa8db3c2c3c98c3429",
-    "zh:c354fba643057e1a6f451b1dc78e4b158cac944fe6886f3105abf272bd596f11",
-    "zh:d21beb8541d20e737fac937eba66b46563a0acb0135b21c8dc3c13b73c7bc2ae",
-    "zh:e9c08a20a277016beb79115a235ddc2d384f0a85d7d074b1b436ffaf2e719aeb",
-    "zh:fecdca5e5f242650f4331688d274cc24504336e16be48139f400e0670e13aea1",
-  ]
-}
-</file>
-
-<file path="opentofu/environments/lab/outputs.tf">
-output "instance_id" {
-  value = oci_core_instance.vm.id
-}
-
-output "private_ip" {
-  value = oci_core_instance.vm.private_ip
-}
-
-output "public_ip" {
-  value = oci_core_public_ip.reserved_ip.ip_address
-}
-
-output "vcn_id" {
-  value = oci_core_vcn.lab_vcn.id
-}
-</file>
-
-<file path="opentofu/environments/lab/providers.tf">
-provider "oci" {
-  tenancy_ocid     = var.tenancy_ocid
-  user_ocid        = var.user_ocid
-  fingerprint      = var.fingerprint
-  private_key_path = var.private_key_path
-  region           = var.region
-}
-</file>
-
-<file path="opentofu/environments/lab/variables.tf">
-variable "tenancy_ocid" {
-  type        = string
-  description = "The tenancy OCID"
-}
-
-variable "user_ocid" {
-  type        = string
-  description = "The user OCID"
-}
-
-variable "fingerprint" {
-  type        = string
-  description = "The key fingerprint"
-}
-
-variable "private_key_path" {
-  type        = string
-  description = "Path to the private key"
-}
-
-variable "region" {
-  type        = string
-  description = "The OCI region"
-}
-
-variable "compartment_ocid" {
-  type        = string
-  description = "The compartment OCID where resources will be created"
-}
-
-variable "vcn_cidr" {
-  type        = string
-  default     = "10.0.0.0/16"
-  description = "CIDR block for the VCN"
-}
-
-variable "subnet_cidr" {
-  type        = string
-  default     = "10.0.0.0/24"
-  description = "CIDR block for the public subnet"
-}
-
-variable "ssh_public_key" {
-  type        = string
-  description = "Public SSH key for the compute instance"
-}
-</file>
-
-<file path="opentofu/environments/lab/versions.tf">
-terraform {
-  required_version = ">= 1.6.0"
-
-  required_providers {
-    oci = {
-      source  = "oracle/oci"
-      version = ">= 5.0.0"
-    }
-  }
-}
-</file>
-
-<file path="opentofu/scripts/apply.sh">
+<file path="opentofu/scripts/init.sh">
 #!/usr/bin/env bash
 
 set -euo pipefail
@@ -583,53 +847,20 @@ ENVIRONMENT=${1:-lab}
 
 cd "opentofu/environments/${ENVIRONMENT}"
 
-tofu apply "${ENVIRONMENT}.tfplan"
+tofu init
 </file>
 
-<file path="opentofu/scripts/destroy.sh">
+<file path="opentofu/scripts/plan.sh">
 #!/usr/bin/env bash
 
+# test workflows
 set -euo pipefail
 
 ENVIRONMENT=${1:-lab}
 
 cd "opentofu/environments/${ENVIRONMENT}"
 
-tofu destroy
-</file>
-
-<file path="opentofu/scripts/retry-apply.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-while true; do
-  echo "======================================"
-  echo "Running tofu apply at $(date)"
-  echo "======================================"
-
-  cd "opentofu/environments/${ENVIRONMENT}"
-
-  tofu apply -auto-approve "${ENVIRONMENT}.tfplan" && break
-
-  echo ""
-  echo "Apply failed. Retrying in 5 minutes..."
-  echo ""
-
-  cd ../../..
-
-  sleep 300
-done
-
-echo ""
-echo "Infrastructure applied successfully."
-</file>
-
-<file path="ansible/inventories/lab/hosts.ini">
-[k3s]
-141.148.11.46 ansible_user=ubuntu
+tofu plan -out="${ENVIRONMENT}.tfplan"
 </file>
 
 <file path="ansible/playbooks/k3s-config-rollout.yml">
@@ -644,6 +875,38 @@ echo "Infrastructure applied successfully."
 
   roles:
     - k3s
+</file>
+
+<file path="ansible/playbooks/os-bootstrap.yml">
+---
+
+# Main Playbook for OS Bootstrap
+- name: OS Bootstrap
+  hosts: all
+  become: true
+
+  roles:
+    - os-bootstrap
+</file>
+
+<file path="ansible/playbooks/os-rollback.yml">
+---
+- name: OS Rollback
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Restore sshd config
+      ansible.builtin.copy:
+        src: /root/backup/sshd_config
+        dest: /etc/ssh/sshd_config
+        remote_src: true
+        mode: "0644"
+
+    - name: Restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
 </file>
 
 <file path="ansible/roles/k3s/handlers/main.yaml">
@@ -707,24 +970,32 @@ echo "Infrastructure applied successfully."
     - Restart journald
 </file>
 
-<file path="ansible/ansible.cfg">
-[defaults]
-inventory = inventories/lab/hosts.ini
-roles_path = roles
-host_key_checking = True
-retry_files_enabled = False
-interpreter_python = auto_silent
+<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
+---
 
-[privilege_escalation]
-become = True
-become_method = sudo
+- name: Enable fail2ban
+  ansible.builtin.service:
+    name: fail2ban
+    enabled: true
+    state: started
 </file>
 
-<file path="ansible/requirements.yml">
+<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
 ---
-collections:
-  - name: community.general
-  - name: ansible.posix
+- name: Install utility packages
+  ansible.builtin.apt:
+    name:
+      - curl
+      - jq
+      - vim
+      - git
+      - unzip
+      - htop
+      - fail2ban
+      - socat
+      - conntrack
+    state: present
+    update_cache: true
 </file>
 
 <file path="docs/Test/Test_prompts.txt">
@@ -852,31 +1123,6 @@ terraform {
 }
 </file>
 
-<file path="opentofu/scripts/init.sh">
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "opentofu/environments/${ENVIRONMENT}"
-
-tofu init
-</file>
-
-<file path="opentofu/scripts/plan.sh">
-#!/usr/bin/env bash
-
-# test workflows
-set -euo pipefail
-
-ENVIRONMENT=${1:-lab}
-
-cd "opentofu/environments/${ENVIRONMENT}"
-
-tofu plan -out="${ENVIRONMENT}.tfplan"
-</file>
-
 <file path=".github/workflows/opentofu-ci.yaml">
 ---
 name: OpenTofu CI
@@ -943,44 +1189,6 @@ jobs:
         with:
           scan-type: config
           scan-ref: .
-</file>
-
-<file path="ansible/inventories/lab/group_vars/all.yml">
----
-
-ansible_python_interpreter: /usr/bin/python3
-</file>
-
-<file path="ansible/playbooks/os-bootstrap.yml">
----
-
-# Main Playbook for OS Bootstrap
-- name: OS Bootstrap
-  hosts: all
-  become: true
-
-  roles:
-    - os-bootstrap
-</file>
-
-<file path="ansible/playbooks/os-rollback.yml">
----
-- name: OS Rollback
-  hosts: all
-  become: true
-
-  tasks:
-    - name: Restore sshd config
-      ansible.builtin.copy:
-        src: /root/backup/sshd_config
-        dest: /etc/ssh/sshd_config
-        remote_src: true
-        mode: "0644"
-
-    - name: Restart ssh
-      ansible.builtin.service:
-        name: ssh
-        state: restarted
 </file>
 
 <file path="ansible/roles/k3s/tasks/kubeconfig.yaml">
@@ -1145,611 +1353,6 @@ ansible_python_interpreter: /usr/bin/python3
     - {path: /data/platform/kubernetes/k3s, owner: root, mode: "0755"}
 </file>
 
-<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-prod.yaml">
----
-#
-
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-config
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: adityac1305@gmail.com          # <-- Replace with your email
-    privateKeySecretRef:
-      name: letsencrypt-prod-account-key
-    solvers:
-      - http01:
-          gatewayHTTPRoute:
-            parentRefs:
-              - name: lab-gateway
-                namespace: envoy-gateway-system
-                kind: Gateway
-</file>
-
-<file path=".gitignore">
-########################################
-# Terraform / OpenTofu State
-########################################
-
-*.tfstate
-*.tfstate.*
-terraform.tfstate
-terraform.tfstate.backup
-
-*.tfplan
-*.tfplan.*
-
-.tofu/
-.terraform/
-**/.terraform/
-**/.tofu/
-
-# Terraform override files (from gitignore 1)
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-
-########################################
-# Terraform / OpenTofu Variables
-########################################
-
-*.tfvars
-*.tfvars.json
-
-!example.tfvars
-!*.example.tfvars
-
-########################################
-# OCI Credentials
-########################################
-
-*.oci
-oci_api_key*
-.oci/
-
-########################################
-# SSH Keys (NEVER COMMIT)
-########################################
-
-*.pem
-*.key
-*.pub
-*.p12
-*.pfx
-
-id_rsa
-id_rsa.pub
-id_ed25519
-id_ed25519.pub
-
-########################################
-# Environment Files
-########################################
-
-.env
-.env.*
-!.env.example
-
-########################################
-# Kubernetes / Kubeconfig
-########################################
-
-.kube/
-*.kubeconfig
-
-# Kubernetes secret patterns (from gitignore 1)
-secret.yaml
-secrets.yaml
-*-secret.yaml
-
-########################################
-# Ansible
-########################################
-
-*.retry
-vault_password*
-*.vault
-
-########################################
-# Logs
-########################################
-
-*.log
-logs/
-
-crash.log
-crash.*.log
-
-########################################
-# Python / Ansible runtime
-########################################
-
-__pycache__/
-*.pyc
-*.pyc
-*.pyo
-*.pyd
-*.so
-
-########################################
-# Virtual environments (from gitignore 1)
-########################################
-
-venv/
-.venv/
-env/
-ENV/
-
-########################################
-# Build artifacts (from gitignore 1)
-########################################
-
-build/
-dist/
-*.egg-info/
-
-########################################
-# Node (future-proof from gitignore 1)
-########################################
-
-node_modules/
-
-########################################
-# VS Code / IDE
-########################################
-
-.vscode/
-.idea/
-
-########################################
-# OS Files
-########################################
-
-.DS_Store
-Thumbs.db
-
-########################################
-# Temporary / Backup Files
-########################################
-
-*.bak
-*.swp
-*.tmp
-*.temp
-*~
-
-########################################
-# Draw.io backups (from gitignore 1)
-########################################
-
-*.drawio.bak
-*.drawio.backup
-*.backup
-
-########################################
-# Vault / Secrets (from gitignore 1)
-########################################
-
-.vault-token
-vault-init.txt
-unseal-keys.txt
-vault-keys.json
-vault-root-token.txt
-
-########################################
-# Docker / Containers (from gitignore 1)
-########################################
-
-docker-data/
-*.pid
-*.sock
-</file>
-
-<file path=".github/workflows/helm-ci.yaml">
----
-name: Helm CI
-
-on:
-  pull_request:
-    paths:
-      - "helm/**"
-  workflow_dispatch:
-
-jobs:
-  ##############################################################
-  # 1. DETECT CHANGED COMPONENTS
-  ##############################################################
-  changes:
-    name: Detect Changed Helm Components
-    runs-on: ubuntu-latest
-    outputs:
-      platform: ${{ steps.filter.outputs.platform }}
-      applications: ${{ steps.filter.outputs.applications }}
-      infrastructure: ${{ steps.filter.outputs.infrastructure }}
-      any_helm: ${{ steps.filter.outputs.any_helm }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Detect changed layers
-        id: filter
-        run: |
-          CHANGED=$(git diff --name-only HEAD^ HEAD 2>/dev/null || git diff --name-only HEAD)
-          echo "Changed files:"
-          echo "$CHANGED"
-
-          HAS_PLATFORM=$(echo "$CHANGED" \
-          | grep -q '^helm/platform/' \
-          && echo true || echo false)
-          HAS_APPS=$(echo "$CHANGED"          | grep -q '^helm/applications/'  && echo true || echo false)
-          HAS_INFRA=$(echo "$CHANGED"         | grep -q '^helm/infrastructure/' && echo true || echo false)
-
-          echo "platform=$HAS_PLATFORM"       >> $GITHUB_OUTPUT
-          echo "applications=$HAS_APPS"       >> $GITHUB_OUTPUT
-          echo "infrastructure=$HAS_INFRA"    >> $GITHUB_OUTPUT
-
-          # any_helm gates the validate + security jobs so they only run
-          # when there are actual helm file changes — not on every PR.
-          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
-            echo "any_helm=true" >> $GITHUB_OUTPUT
-          else
-            echo "any_helm=false" >> $GITHUB_OUTPUT
-          fi
-
-  ##############################################################
-  # 2. LINT
-  # Skips components that have no Chart.yaml (values-only folders like
-  # cert-manager, envoy-gateway, vault — these are not local Helm charts,
-  # they are upstream charts with local values files only).
-  ##############################################################
-  lint:
-    name: Helm Lint
-    runs-on: ubuntu-latest
-    needs: changes
-    if: |
-      needs.changes.outputs.platform == 'true' ||
-      needs.changes.outputs.applications == 'true' ||
-      needs.changes.outputs.infrastructure == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
-        with:
-          version: "v3.17.0"
-
-      - name: Add Helm repos
-        # cert-manager + envoy-gateway use OCI — no repo add needed for them
-        run: |
-          helm repo add hashicorp    https://helm.releases.hashicorp.com
-          helm repo add bitnami      https://charts.bitnami.com/bitnami
-          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
-          helm repo update
-
-      - name: Lint platform charts
-        if: needs.changes.outputs.platform == 'true'
-        run: |
-          for dir in helm/platform/*/; do
-            [ -d "$dir" ] || continue
-            if [ -f "$dir/Chart.yaml" ]; then
-              echo "==> Linting $dir"
-              helm lint "$dir" --strict
-            elif [ -f "$dir/values.yaml" ]; then
-              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
-            fi
-          done
-
-      - name: Lint application charts
-        if: needs.changes.outputs.applications == 'true'
-        run: |
-          for dir in helm/applications/*/; do
-            [ -d "$dir" ] || continue
-            if [ -f "$dir/Chart.yaml" ]; then
-              echo "==> Linting $dir"
-              helm lint "$dir" --strict
-            elif [ -f "$dir/values.yaml" ]; then
-              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
-            fi
-          done
-
-  ##############################################################
-  # 3. MANIFEST VALIDATION
-  # Only runs when helm files actually changed (any_helm gate).
-  # Validates namespace.yaml, httproute.yaml, gateway.yaml etc. against:
-  #   - Kubernetes built-in schemas (k8s 1.33)
-  #   - CRD schemas from datreeio catalog (Gateway API, cert-manager)
-  # Excludes:
-  #   values.yaml      — not a Kubernetes manifest
-  #   helmrelease.yaml — reference documentation, not a Kubernetes manifest
-  ##############################################################
-  validate:
-    name: Manifest Validation
-    runs-on: ubuntu-latest
-    needs: [changes, lint]
-    if: needs.changes.outputs.any_helm == 'true'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install kubeconform
-        run: |
-          curl -sSL \
-            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
-            | tar -xz -C /usr/local/bin kubeconform
-      - name: Validate Kubernetes manifests
-        run: |
-          # Collect files to validate — exclude non-manifest yaml files.
-          # gateway.yaml is excluded from datreeio schema validation because
-          # the datreeio CRD catalog has a schema bug where tls.mode: Terminate
-          # fails enum validation despite being a valid Gateway API value.
-          # Gateway resources are still validated against the built-in k8s schema.
-          FILES=$(find helm/ -name "*.yaml" \
-            ! -name "values.yaml" \
-            ! -name "helmrelease.yaml" \
-            ! -name "gateway.yaml")
-          if [ -z "$FILES" ]; then
-            echo "No Kubernetes manifest files found to validate."
-            exit 0
-          fi
-          echo "$FILES" | xargs kubeconform \
-            -kubernetes-version 1.33.0 \
-            -schema-location default \
-            -schema-location \
-              'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            -ignore-missing-schemas \
-            -summary \
-            -verbose
-          # Validate gateway.yaml separately against built-in k8s schema only
-          # (skipping the datreeio schema that has the tls.mode enum bug)
-          echo "Validating gateway.yaml against built-in schema only..."
-          kubeconform \
-            -kubernetes-version 1.33.0 \
-            -schema-location default \
-            -ignore-missing-schemas \
-            -summary \
-            -verbose \
-            helm/infrastructure/gateway-config/gateway.yaml
-
-  ##############################################################
-  # 4. SECURITY SCAN
-  # Only runs when helm files actually changed (any_helm gate).
-  ##############################################################
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: [changes, validate]
-    if: needs.changes.outputs.any_helm == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run Trivy config scan
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: config
-          scan-ref: helm/
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/fail2ban.yml">
----
-
-- name: Enable fail2ban
-  ansible.builtin.service:
-    name: fail2ban
-    enabled: true
-    state: started
-</file>
-
-<file path="ansible/roles/os-bootstrap/tasks/packages.yml">
----
-- name: Install utility packages
-  ansible.builtin.apt:
-    name:
-      - curl
-      - jq
-      - vim
-      - git
-      - unzip
-      - htop
-      - fail2ban
-      - socat
-      - conntrack
-    state: present
-    update_cache: true
-</file>
-
-<file path="helm/infrastructure/cert-config/certificate-gateway-default.yaml">
----
-#
-
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: gateway-default-tls
-  namespace: envoy-gateway-system
-  labels:
-    app.kubernetes.io/name: cert-manager
-    app.kubernetes.io/part-of: cert-config
-spec:
-  secretName: gateway-default-tls
-  issuerRef:
-    name: letsencrypt-staging             # <-- change to "letsencrypt-prod" after testing
-    kind: ClusterIssuer
-  commonName: "ac1305-lab.duckdns.org"
-  dnsNames:
-    - "ac1305-lab.duckdns.org"
-  privateKey:
-    algorithm: ECDSA
-    size: 256
-  duration: 2160h
-  renewBefore: 360h                      # renew 15 days before expiration
-</file>
-
-<file path="helm/platform/cert-manager/helmrelease.yaml">
----
-# Adding Comment to trigger the workflow again
-# helm/platform/cert-manager/helmrelease.yaml
-#
-# THIS FILE IS READ BY helm-cd.yaml at deploy time.
-# To upgrade cert-manager: change `version` below and merge to main.
-# helm-cd.yaml reads chart_oci, version, release_name, and namespace
-# from this file automatically — no changes to helm-cd.yaml needed.
-#
-# To install  : ensure this folder exists in git → merge to main
-# To upgrade  : change version below → merge to main
-# To uninstall: delete this folder from git → merge to main
-
-chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
-version: "v1.20.2"
-release_name: "cert-manager"
-namespace: "cert-manager"
-</file>
-
-<file path="helm/platform/cert-manager/values.yaml">
----
-# helm/platform/cert-manager/values.yaml
-#
-# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
-#
-# To upgrade cert-manager: change version in
-# helmrelease.yaml → merge to main.
-
-# ── CRD management ───────────────────────────────────────────────────────────
-# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
-# keep=true    → CRDs (and all your issued TLS certs) survive `helm uninstall`.
-#                Only set keep=false if you want a complete wipe including certs.
-crds:
-  enabled: true
-  keep: true
-
-# ── Replica count ────────────────────────────────────────────────────────────
-# 1 is correct for a single-node k3s cluster. Increase to 2 if you add nodes.
-replicaCount: 1
-
-# ── Feature gates ────────────────────────────────────────────────────────────
-# ExperimentalGatewayAPISupport: required for cert-manager to solve ACME
-# HTTP-01 challenges via Gateway API HTTPRoute resources.
-# Without this, Let's Encrypt challenges fail silently with Envoy Gateway.
-featureGates: "ExperimentalGatewayAPISupport=true"
-
-# ── Controller (main cert-manager pod) ───────────────────────────────────────
-nodeSelector:
-  kubernetes.io/os: linux
-
-resources:
-  requests:
-    cpu: 50m
-    memory: 64Mi
-  limits:
-    cpu: 250m
-    memory: 256Mi
-
-# ── Webhook ──────────────────────────────────────────────────────────────────
-# Validates and mutates Certificate, CertificateRequest,
-# and Issuer resources.
-webhook:
-  replicaCount: 1
-  timeoutSeconds: 10
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── CA Injector ──────────────────────────────────────────────────────────────
-# Injects CA bundles into webhook configurations and CRD conversion webhooks.
-# Must remain enabled — disabling it breaks cert-manager's own admission webhooks.
-cainjector:
-  enabled: true
-  replicaCount: 1
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 25m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Startup API check ────────────────────────────────────────────────────────
-# One-shot Job that probes the cert-manager API after install/upgrade.
-# Acts as the readiness gate for --wait/--atomic in helm-cd.yaml.
-# Keep enabled — if disabled, helm-cd may declare success before cert-manager
-# is actually ready to issue certificates.
-startupapicheck:
-  enabled: true
-  nodeSelector:
-    kubernetes.io/os: linux
-  resources:
-    requests:
-      cpu: 10m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
-
-# ── Prometheus metrics ───────────────────────────────────────────────────────
-# Disabled — no Prometheus stack installed. Enable when you add monitoring.
-prometheus:
-  enabled: false
-
-# ── Log level ────────────────────────────────────────────────────────────────
-# 2 = standard info logging. Set to 4-6 when debugging ACME challenge failures.
-# logLevel: 2
-
-# ── Global settings ──────────────────────────────────────────────────────────
-global:
-  # leaderElection namespace must match the install namespace (cert-manager).
-  # Required even with replicaCount=1 — the controller
-  # always runs leader election.
-  leaderElection:
-    namespace: cert-manager
-</file>
-
-<file path="ansible/playbooks/k3s-bootstrap.yml">
----
-
-- name: K3s Bootstrap
-  hosts: k3s
-  become: true
-
-  roles:
-    - k3s
-</file>
-
-<file path="ansible/roles/k3s/defaults/main.yaml">
-# ansible/roles/k3s/defaults/main.yaml
----
-
-k3s_version: "v1.33.1+k3s1"
-k3s_data_dir: /data/platform/kubernetes/k3s
-k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
-k3s_install: true
-k3s_config_only: false
-
-k3s_config:
-  data_dir: /data/platform/kubernetes/k3s
-  disable:
-    - traefik
-  kube_apiserver:
-    event_ttl: 1h
-  kubelet:
-    max_pods: 110
-    container_log_max_size: 10Mi
-    container_log_max_files: 5
-</file>
-
 <file path="ansible/roles/os-bootstrap/tasks/firewall.yml">
 ---
 
@@ -1832,73 +1435,30 @@ k3s_config:
     state: present
 </file>
 
-<file path="helm/infrastructure/gateway-config/gateway.yaml">
+<file path="helm/infrastructure/cert-config/clusterissuer-letsencrypt-prod.yaml">
 ---
-# helm/infrastructure/gateway-config/gateway.yaml
 #
-# The Gateway resource defines the actual listeners (ports 80 + 443) that
-# Envoy Gateway programs into the Envoy proxy data plane.
-#
-# Port 80  — HTTP only, used for:
-#             a) Let's Encrypt HTTP-01 ACME challenge responses
-#             b) Redirecting all other HTTP traffic to HTTPS
-#             Applications should NOT serve on HTTP directly.
-#
-# Port 443 — HTTPS with TLS termination. cert-manager provisions and rotates
-#             the wildcard certificate automatically via letsencrypt-prod.
-#             Individual HTTPRoutes attach to this listener by referencing
-#             this Gateway as their parentRef.
-#
-# The wildcard cert *.ac1305-lab.duckdns.org covers:
-#   vault.ac1305-lab.duckdns.org
-#   keycloak.ac1305-lab.duckdns.org
-#   auth.ac1305-lab.duckdns.org   (oauth2-proxy)
-#   <any-app>.ac1305-lab.duckdns.org
-#
-# After applying, Envoy Gateway creates a managed Envoy deployment and a
-# LoadBalancer Service in envoy-gateway-system. On k3s the LoadBalancer
-# is satisfied by k3s's built-in servicelb (formerly klipper-lb).
-# The external IP should match your OCI instance public IP: 155.133.4.76
-# Verify with: kubectl get gateway lab-gateway -n envoy-gateway-system
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: lab-gateway
-  namespace: envoy-gateway-system
-  labels:
-    app.kubernetes.io/name: envoy-gateway
-    app.kubernetes.io/part-of: gateway-config
-spec:
-  gatewayClassName: envoy
-  listeners:
-    # ── HTTP listener ─────────────────────────────────────────────────────────
-    - name: http
-      protocol: HTTP
-      port: 80
-      # Allow HTTPRoutes from any namespace to attach to this listener.
-      # Individual component HTTPRoutes (vault, keycloak, etc.) live in
-      # their own namespaces and need cross-namespace attachment.
-      allowedRoutes:
-        namespaces:
-          from: All
 
-    # -- HTTPS listener
-    # TLS is terminated here at the Envoy proxy layer. App pods receive plain HTTP internally.
-    # certificateRefs lists one cert per subdomain -- Envoy picks the correct cert per request using SNI.
-    # Start with gateway-default-tls (base domain)
-    # When adding an app, add its cert here alongside its HTTPRoute.
-    - name: https
-      protocol: HTTPS
-      port: 443
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - name: gateway-default-tls                        # issued for ac1305-lab.duckdns.org
-            namespace: envoy-gateway-system
-            kind: Secret
-      allowedRoutes:
-        namespaces:
-          from: All
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: adityac1305@gmail.com          # <-- Replace with your email
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - http01:
+          gatewayHTTPRoute:
+            parentRefs:
+              - name: lab-gateway
+                namespace: envoy-gateway-system
+                kind: Gateway
 </file>
 
 <file path="opentofu/environments/lab/main.tf">
@@ -2148,6 +1708,222 @@ resource "oci_core_public_ip" "reserved_ip" {
 }
 </file>
 
+<file path=".github/workflows/helm-ci.yaml">
+---
+name: Helm CI
+
+on:
+  pull_request:
+    paths:
+      - "helm/**"
+  workflow_dispatch:
+
+jobs:
+  ##############################################################
+  # 1. DETECT CHANGED COMPONENTS
+  ##############################################################
+  changes:
+    name: Detect Changed Helm Components
+    runs-on: ubuntu-latest
+    outputs:
+      platform: ${{ steps.filter.outputs.platform }}
+      applications: ${{ steps.filter.outputs.applications }}
+      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      any_helm: ${{ steps.filter.outputs.any_helm }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed layers
+        id: filter
+        run: |
+          CHANGED=$(git diff --name-only HEAD^ HEAD 2>/dev/null || git diff --name-only HEAD)
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          HAS_PLATFORM=$(echo "$CHANGED" \
+          | grep -q '^helm/platform/' \
+          && echo true || echo false)
+          HAS_APPS=$(echo "$CHANGED"          | grep -q '^helm/applications/'  && echo true || echo false)
+          HAS_INFRA=$(echo "$CHANGED"         | grep -q '^helm/infrastructure/' && echo true || echo false)
+
+          echo "platform=$HAS_PLATFORM"       >> $GITHUB_OUTPUT
+          echo "applications=$HAS_APPS"       >> $GITHUB_OUTPUT
+          echo "infrastructure=$HAS_INFRA"    >> $GITHUB_OUTPUT
+
+          # any_helm gates the validate + security jobs so they only run
+          # when there are actual helm file changes — not on every PR.
+          if [ "$HAS_PLATFORM" = "true" ] || [ "$HAS_APPS" = "true" ] || [ "$HAS_INFRA" = "true" ]; then
+            echo "any_helm=true" >> $GITHUB_OUTPUT
+          else
+            echo "any_helm=false" >> $GITHUB_OUTPUT
+          fi
+
+  ##############################################################
+  # 2. LINT
+  # Skips components that have no Chart.yaml (values-only folders like
+  # cert-manager, envoy-gateway, vault — these are not local Helm charts,
+  # they are upstream charts with local values files only).
+  ##############################################################
+  lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    needs: changes
+    if: |
+      needs.changes.outputs.platform == 'true' ||
+      needs.changes.outputs.applications == 'true' ||
+      needs.changes.outputs.infrastructure == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.17.0"
+
+      - name: Add Helm repos
+        # cert-manager + envoy-gateway use OCI — no repo add needed for them
+        run: |
+          helm repo add hashicorp    https://helm.releases.hashicorp.com
+          helm repo add bitnami      https://charts.bitnami.com/bitnami
+          helm repo add oauth2-proxy https://oauth2-proxy.github.io/manifests
+          helm repo update
+
+      - name: Lint platform charts
+        if: needs.changes.outputs.platform == 'true'
+        run: |
+          for dir in helm/platform/*/; do
+            [ -d "$dir" ] || continue
+            if [ -f "$dir/Chart.yaml" ]; then
+              echo "==> Linting $dir"
+              helm lint "$dir" --strict
+            elif [ -f "$dir/values.yaml" ]; then
+              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
+            fi
+          done
+
+      - name: Lint application charts
+        if: needs.changes.outputs.applications == 'true'
+        run: |
+          for dir in helm/applications/*/; do
+            [ -d "$dir" ] || continue
+            if [ -f "$dir/Chart.yaml" ]; then
+              echo "==> Linting $dir"
+              helm lint "$dir" --strict
+            elif [ -f "$dir/values.yaml" ]; then
+              echo "==> SKIP $dir — upstream chart with local values only (no Chart.yaml)"
+            fi
+          done
+
+  ##############################################################
+  # 3. MANIFEST VALIDATION
+  # Only runs when helm files actually changed (any_helm gate).
+  # Validates namespace.yaml, httproute.yaml, gateway.yaml etc. against:
+  #   - Kubernetes built-in schemas (k8s 1.33)
+  #   - CRD schemas from datreeio catalog (Gateway API, cert-manager)
+  # Excludes:
+  #   values.yaml      — not a Kubernetes manifest
+  #   helmrelease.yaml — reference documentation, not a Kubernetes manifest
+  ##############################################################
+  validate:
+    name: Manifest Validation
+    runs-on: ubuntu-latest
+    needs: [changes, lint]
+    if: needs.changes.outputs.any_helm == 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kubeconform
+        run: |
+          curl -sSL \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+      - name: Validate Kubernetes manifests
+        run: |
+          # Collect files to validate — exclude non-manifest yaml files.
+          # gateway.yaml is excluded from datreeio schema validation because
+          # the datreeio CRD catalog has a schema bug where tls.mode: Terminate
+          # fails enum validation despite being a valid Gateway API value.
+          # Gateway resources are still validated against the built-in k8s schema.
+          FILES=$(find helm/ -name "*.yaml" \
+            ! -name "values.yaml" \
+            ! -name "helmrelease.yaml" \
+            ! -name "gateway.yaml")
+          if [ -z "$FILES" ]; then
+            echo "No Kubernetes manifest files found to validate."
+            exit 0
+          fi
+          echo "$FILES" | xargs kubeconform \
+            -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -schema-location \
+              'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -ignore-missing-schemas \
+            -summary \
+            -verbose
+          # Validate gateway.yaml separately against built-in k8s schema only
+          # (skipping the datreeio schema that has the tls.mode enum bug)
+          echo "Validating gateway.yaml against built-in schema only..."
+          kubeconform \
+            -kubernetes-version 1.33.0 \
+            -schema-location default \
+            -ignore-missing-schemas \
+            -summary \
+            -verbose \
+            helm/infrastructure/gateway-config/gateway.yaml
+
+  ##############################################################
+  # 4. SECURITY SCAN
+  # Only runs when helm files actually changed (any_helm gate).
+  ##############################################################
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [changes, validate]
+    if: needs.changes.outputs.any_helm == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: helm/
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+</file>
+
+<file path="ansible/playbooks/k3s-bootstrap.yml">
+---
+
+- name: K3s Bootstrap
+  hosts: k3s
+  become: true
+
+  roles:
+    - k3s
+</file>
+
+<file path="helm/platform/cert-manager/helmrelease.yaml">
+---
+# Adding Comment to trigger the workflow again
+# helm/platform/cert-manager/helmrelease.yaml
+#
+# THIS FILE IS READ BY helm-cd.yaml at deploy time.
+# To upgrade cert-manager: change `version` below and merge to main.
+# helm-cd.yaml reads chart_oci, version, release_name, and namespace
+# from this file automatically — no changes to helm-cd.yaml needed.
+#
+# To install  : ensure this folder exists in git → merge to main
+# To upgrade  : change version below → merge to main
+# To uninstall: delete this folder from git → merge to main
+
+chart_oci: "oci://quay.io/jetstack/charts/cert-manager"
+version: "v1.20.2"
+release_name: "cert-manager"
+namespace: "cert-manager"
+</file>
+
 <file path=".pre-commit-config.yaml">
 ---
 
@@ -2156,6 +1932,107 @@ repos:
     rev: v8.18.0
     hooks:
       - id: gitleaks
+</file>
+
+<file path="ansible/playbooks/site.yml">
+---
+
+- name: OS Bootstrap
+  import_playbook: os-bootstrap.yml
+
+- name: K3s Bootstrap
+  import_playbook: k3s-bootstrap.yml
+</file>
+
+<file path="ansible/roles/k3s/defaults/main.yaml">
+# ansible/roles/k3s/defaults/main.yaml
+---
+
+k3s_version: "v1.33.1+k3s1"
+k3s_data_dir: /data/platform/kubernetes/k3s
+k3s_kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+k3s_install: true
+k3s_config_only: false
+
+k3s_config:
+  data_dir: /data/platform/kubernetes/k3s
+  disable:
+    - traefik
+  kube_apiserver:
+    event_ttl: 1h
+  kubelet:
+    max_pods: 110
+    container_log_max_size: 10Mi
+    container_log_max_files: 5
+</file>
+
+<file path="helm/infrastructure/gateway-config/gateway.yaml">
+---
+# helm/infrastructure/gateway-config/gateway.yaml
+#
+# The Gateway resource defines the actual listeners (ports 80 + 443) that
+# Envoy Gateway programs into the Envoy proxy data plane.
+#
+# Port 80  — HTTP only, used for:
+#             a) Let's Encrypt HTTP-01 ACME challenge responses
+#             b) Redirecting all other HTTP traffic to HTTPS
+#             Applications should NOT serve on HTTP directly.
+#
+# Port 443 — HTTPS with TLS termination. cert-manager provisions and rotates
+#             the wildcard certificate automatically via letsencrypt-prod.
+#             Individual HTTPRoutes attach to this listener by referencing
+#             this Gateway as their parentRef.
+#
+# The wildcard cert *.ac1305-lab.duckdns.org covers:
+#   vault.ac1305-lab.duckdns.org
+#   keycloak.ac1305-lab.duckdns.org
+#   auth.ac1305-lab.duckdns.org   (oauth2-proxy)
+#   <any-app>.ac1305-lab.duckdns.org
+#
+# After applying, Envoy Gateway creates a managed Envoy deployment and a
+# LoadBalancer Service in envoy-gateway-system. On k3s the LoadBalancer
+# is satisfied by k3s's built-in servicelb (formerly klipper-lb).
+# The external IP should match your OCI instance public IP: 155.133.4.76
+# Verify with: kubectl get gateway lab-gateway -n envoy-gateway-system
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lab-gateway
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: envoy-gateway
+    app.kubernetes.io/part-of: gateway-config
+spec:
+  gatewayClassName: envoy
+  listeners:
+    # ── HTTP listener ─────────────────────────────────────────────────────────
+    - name: http
+      protocol: HTTP
+      port: 80
+      # Allow HTTPRoutes from any namespace to attach to this listener.
+      # Individual component HTTPRoutes (vault, keycloak, etc.) live in
+      # their own namespaces and need cross-namespace attachment.
+      allowedRoutes:
+        namespaces:
+          from: All
+
+    # -- HTTPS listener
+    # TLS is terminated here at the Envoy proxy layer. App pods receive plain HTTP internally.
+    # certificateRefs lists one cert per subdomain -- Envoy picks the correct cert per request using SNI.
+    # Start with gateway-default-tls (base domain)
+    # When adding an app, add its cert here alongside its HTTPRoute.
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: gateway-default-tls                        # issued for ac1305-lab.duckdns.org
+            namespace: envoy-gateway-system
+            kind: Secret
+      allowedRoutes:
+        namespaces:
+          from: All
 </file>
 
 <file path="ansible/roles/k3s/tasks/main.yaml">
@@ -2253,14 +2130,24 @@ repos:
       - "cleanup policy active above 85%"
 </file>
 
-<file path="ansible/playbooks/site.yml">
+<file path="ansible/roles/os-bootstrap/tasks/main.yml">
 ---
+# Main Task Loader
 
-- name: OS Bootstrap
-  import_playbook: os-bootstrap.yml
+- name: Package installation
+  ansible.builtin.import_tasks: packages.yml
 
-- name: K3s Bootstrap
-  import_playbook: k3s-bootstrap.yml
+- name: SSH configuration
+  ansible.builtin.import_tasks: ssh.yml
+
+- name: Firewall setup
+  ansible.builtin.import_tasks: firewall.yml
+
+- name: Fail2ban setup
+  ansible.builtin.import_tasks: fail2ban.yml
+
+- name: Sysctl configuration
+  ansible.builtin.import_tasks: sysctl.yml
 </file>
 
 <file path="ansible/roles/k3s/tasks/install.yaml">
@@ -2422,24 +2309,31 @@ repos:
   changed_when: false
 </file>
 
-<file path="ansible/roles/os-bootstrap/tasks/main.yml">
+<file path="helm/infrastructure/cert-config/certificate-gateway-default.yaml">
 ---
-# Main Task Loader
+#
 
-- name: Package installation
-  ansible.builtin.import_tasks: packages.yml
-
-- name: SSH configuration
-  ansible.builtin.import_tasks: ssh.yml
-
-- name: Firewall setup
-  ansible.builtin.import_tasks: firewall.yml
-
-- name: Fail2ban setup
-  ansible.builtin.import_tasks: fail2ban.yml
-
-- name: Sysctl configuration
-  ansible.builtin.import_tasks: sysctl.yml
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gateway-default-tls
+  namespace: envoy-gateway-system
+  labels:
+    app.kubernetes.io/name: cert-manager
+    app.kubernetes.io/part-of: cert-config
+spec:
+  secretName: gateway-default-tls
+  issuerRef:
+    name: letsencrypt-prod  # change to "letsencrypt-prod" after testing with letsencrypt-staging
+    kind: ClusterIssuer
+  commonName: "ac1305-lab.duckdns.org"
+  dnsNames:
+    - "ac1305-lab.duckdns.org"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  duration: 2160h
+  renewBefore: 360h                      # renew 15 days before expiration
 </file>
 
 <file path=".github/workflows/security-ci.yaml">
@@ -2587,6 +2481,576 @@ jobs:
             -i inventories/lab/hosts.ini \
             playbooks/k3s-config-rollout.yml \
             --syntax-check
+</file>
+
+<file path="repo_structure.txt">
+Folder PATH listing for volume Data
+Volume serial number is 0000001A C87A:83A4
+D:.
+|   .gitignore
+|   .pre-commit-config.yaml
+|   repomix-output.xml
+|   repo_structure.txt
+|   
++---.github
+|   \---workflows
+|           ansible-ci.yaml
+|           helm-cd.yaml
+|           helm-ci.yaml
+|           infrastructure-deploy.yaml
+|           opentofu-ci.yaml
+|           security-ci.yaml
+|           
++---ansible
+|   |   ansible.cfg
+|   |   requirements.yml
+|   |   
+|   +---inventories
+|   |   +---dev
+|   |   \---lab
+|   |       |   hosts.ini
+|   |       |   
+|   |       \---group_vars
+|   |               all.yml
+|   |               
+|   +---playbooks
+|   |       k3s-bootstrap.yml
+|   |       k3s-config-rollout.yml
+|   |       os-bootstrap.yml
+|   |       os-rollback.yml
+|   |       site.yml
+|   |       
+|   \---roles
+|       +---k3s
+|       |   +---defaults
+|       |   |       main.yaml
+|       |   |       
+|       |   +---handlers
+|       |   |       main.yaml
+|       |   |       
+|       |   +---tasks
+|       |   |       cleanup.yaml
+|       |   |       config-rollout.yaml
+|       |   |       install.yaml
+|       |   |       kubeconfig.yaml
+|       |   |       logging.yaml
+|       |   |       main.yaml
+|       |   |       prereqs.yaml
+|       |   |       storage.yaml
+|       |   |       validate_disk.yaml
+|       |   |       
+|       |   \---templates
+|       |           config.yaml.j2
+|       |           
+|       \---os-bootstrap
+|           \---tasks
+|                   fail2ban.yml
+|                   firewall.yml
+|                   main.yml
+|                   packages.yml
+|                   ssh.yml
+|                   sysctl.yml
+|                   
++---docs
+|   \---Test
+|           Test_prompts.txt
+|           
++---helm
+|   +---applications
+|   +---infrastructure
+|   |   +---cert-config
+|   |   |       certificate-gateway-default.yaml
+|   |   |       clusterissuer-letsencrypt-prod.yaml
+|   |   |       clusterissuer-letsencrypt-staging.yaml
+|   |   |       
+|   |   \---gateway-config
+|   |           gateway.yaml
+|   |           gatewayclass.yaml
+|   |           httproute-redirect.yaml
+|   |           
+|   \---platform
+|       +---cert-manager
+|       |       helmrelease.yaml
+|       |       namespace.yaml
+|       |       values.yaml
+|       |       
+|       \---envoy-gateway
+|               helmrelease.yaml
+|               namespace.yaml
+|               values.yaml
+|               
+\---opentofu
+    +---bootstrap
+    |   \---state-backend
+    |       |   .terraform.lock.hcl
+    |       |   bootstrap.tfplan
+    |       |   bootstrap.tfvars
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   terraform.tfstate
+    |       |   terraform.tfstate.backup
+    |       |   variables.tf
+    |       |   
+    |       +---.terraform
+    |       |   \---providers
+    |       |       \---registry.opentofu.org
+    |       |           \---oracle
+    |       |               \---oci
+    |       |                   \---8.17.0
+    |       |                       |   windows_amd64.lock
+    |       |                       |   
+    |       |                       \---windows_amd64
+    |       |                               terraform-provider-oci_v8.17.0
+    |       |                               
+    |       \---scripts
+    |               apply.sh
+    |               destroy.sh
+    |               init.sh
+    |               plan.sh
+    |               
+    +---environments
+    |   +---dev
+    |   \---lab
+    |       |   .terraform.lock.hcl
+    |       |   backend.tf
+    |       |   lab.tfplan
+    |       |   main.tf
+    |       |   outputs.tf
+    |       |   providers.tf
+    |       |   terraform.tfvars
+    |       |   variables.tf
+    |       |   versions.tf
+    |       |   
+    |       \---.terraform
+    |           |   terraform.tfstate
+    |           |   
+    |           \---providers
+    |               \---registry.opentofu.org
+    |                   \---oracle
+    |                       \---oci
+    |                           \---8.15.0
+    |                               |   windows_amd64.lock
+    |                               |   
+    |                               \---windows_amd64
+    |                                       terraform-provider-oci_v8.15.0
+    |                                       
+    +---modules
+    \---scripts
+            apply.sh
+            destroy.sh
+            init.sh
+            plan.sh
+            retry-apply.sh
+</file>
+
+<file path=".github/workflows/infrastructure-deploy.yaml">
+---
+name: Infrastructure Deploy (CD)
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "opentofu/**"
+      - "ansible/**"
+  workflow_dispatch:
+jobs:
+  ############################################################
+  # 0. CHANGE DETECTION
+  ############################################################
+  changes:
+    name: Detect Change Type
+    runs-on: ubuntu-latest
+    outputs:
+      tofu: ${{ steps.filter.outputs.tofu }}
+      k3s_config: ${{ steps.filter.outputs.k3s_config }}
+      k3s_version: ${{ steps.filter.outputs.k3s_version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Detect changed files
+        id: filter
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tofu=true" >> $GITHUB_OUTPUT
+            echo "k3s_config=true" >> $GITHUB_OUTPUT
+            echo "k3s_version=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only HEAD^ HEAD)
+          echo "$CHANGED"
+          if echo "$CHANGED" | grep -q "^opentofu/"; then
+            echo "tofu=true" >> $GITHUB_OUTPUT
+          else
+            echo "tofu=false" >> $GITHUB_OUTPUT
+          fi
+          K3S_CHANGED=false
+          K3S_PATTERN="^ansible/(roles/k3s/|playbooks/k3s-config-rollout"
+          K3S_PATTERN="${K3S_PATTERN}\.yml|roles/k3s/templates/|roles/k3s/defaults/)"
+          if echo "$CHANGED" | grep -Eq "$K3S_PATTERN"; then
+            K3S_CHANGED=true
+          fi
+          echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
+          K3S_VERSION_CHANGED=false
+          K3S_VER_PATH="^ansible/roles/k3s/defaults/main.yaml"
+          if echo "$CHANGED" | grep -q "$K3S_VER_PATH"; then
+            K3S_VERSION_CHANGED=true
+          fi
+          echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT
+  ############################################################
+  # 1. OPEN TOFU PLAN
+  ############################################################
+  plan:
+    if: needs.changes.outputs.tofu == 'true'
+    name: OpenTofu Plan
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Create OCI API Key File
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+      - name: Init
+        run: |
+          tofu init -input=false -reconfigure
+      - name: Plan
+        env:
+          TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
+          TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
+          TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
+          TF_VAR_region: ${{ secrets.OCI_REGION }}
+          TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
+          TF_VAR_private_key_path: oci_api_key.pem
+          TF_VAR_ssh_public_key: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
+        run: tofu plan -out=tfplan
+      - name: Upload Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab/tfplan
+  ############################################################
+  # 2. OPEN TOFU APPLY
+  ############################################################
+  apply:
+    if: needs.changes.outputs.tofu == 'true'
+    name: OpenTofu Apply
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - plan
+    environment:
+      name: lab
+    defaults:
+      run:
+        working-directory: opentofu/environments/lab
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Create OCI API Key File
+        run: |
+          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
+          chmod 600 oci_api_key.pem
+      - name: Init
+        run: |
+          tofu init -input=false -reconfigure
+      - name: Download Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: tofu-plan
+          path: opentofu/environments/lab
+      - name: Apply
+        run: |
+          tofu apply -auto-approve tfplan
+  ############################################################
+  # 3. GENERATE INVENTORY
+  ############################################################
+  inventory:
+    if: |
+      always() &&
+      needs.changes.result == 'success' &&
+      (
+        needs.changes.outputs.tofu == 'true' ||
+        needs.changes.outputs.k3s_config == 'true'
+      ) &&
+      (
+        needs.apply.result == 'success' ||
+        needs.apply.result == 'skipped'
+      )
+    name: Generate Inventory
+    runs-on: ubuntu-latest
+    needs:
+      - changes
+      - apply
+    outputs:
+      vm_ip: ${{ steps.extract.outputs.vm_ip }}
+      tofu: ${{ needs.changes.outputs.tofu }}
+      k3s_config: ${{ needs.changes.outputs.k3s_config }}
+      k3s_version: ${{ needs.changes.outputs.k3s_version }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+      - name: Init
+        working-directory: opentofu/environments/lab
+        run: |
+          tofu init -input=false -reconfigure
+      - name: Extract IP
+        id: extract
+        working-directory: opentofu/environments/lab
+        run: |
+          IP=$(tofu output -raw public_ip)
+          echo "vm_ip=$IP" >> $GITHUB_OUTPUT
+      - name: Create inventory
+        run: |
+          mkdir -p inventory
+          echo "[k3s]" > inventory/hosts.ini
+          VM_IP="${{ steps.extract.outputs.vm_ip }}"
+          echo "$VM_IP ansible_user=ubuntu" >> inventory/hosts.ini
+      - name: Upload Inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory/hosts.ini
+  ############################################################
+  # 4. FULL ANSIBLE BOOTSTRAP
+  ############################################################
+  ansible:
+    if: |
+      always() &&
+      needs.inventory.result == 'success' &&
+      (
+        needs.inventory.outputs.tofu == 'true' ||
+        needs.inventory.outputs.k3s_version == 'true'
+      )
+    name: Run Full Ansible Bootstrap
+    runs-on: ubuntu-latest
+    needs:
+      - inventory
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ansible
+      - name: Install Ansible
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ansible ansible-lint
+      - name: Collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+      - name: SSH key
+        run: |
+          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+      - name: Run site playbook
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
+          ansible-playbook \
+          -i inventory/hosts.ini \
+          ansible/playbooks/site.yml \
+          --private-key key.pem
+  ############################################################
+  # 5. K3S CONFIG ONLY ROLLOUT
+  ############################################################
+  config-rollout:
+    if: |
+      always() &&
+      needs.inventory.result == 'success' &&
+      needs.inventory.outputs.k3s_config == 'true' &&
+      (needs.ansible.result == 'success' || needs.ansible.result == 'skipped')
+    name: K3s Config Rollout
+    runs-on: ubuntu-latest
+    needs:
+      - inventory
+      - ansible
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ansible-inventory
+          path: inventory
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-ansible
+      - name: Install Ansible
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install ansible
+      - name: Install Collections
+        run: |
+          ansible-galaxy collection install community.general
+          ansible-galaxy collection install ansible.posix
+      - name: SSH Key
+        run: |
+          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
+          chmod 600 key.pem
+      - name: Run K3s Config Rollout
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: False
+        run: |
+          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
+          ansible-playbook \
+          -i inventory/hosts.ini \
+          ansible/playbooks/k3s-config-rollout.yml \
+          --private-key key.pem
+</file>
+
+<file path="helm/platform/cert-manager/values.yaml">
+---
+# helm/platform/cert-manager/values.yaml
+#
+# cert-manager v1.20.x — tuned for a k3s single-node ARM64 OCI instance.
+#
+# To upgrade cert-manager: change version in
+# helmrelease.yaml → merge to main.
+
+# ── CRD management ───────────────────────────────────────────────────────────
+# enabled=true → Helm owns the CRDs and handles schema migrations on upgrade.
+# keep=true    → CRDs survive `helm uninstall`.
+#                Only set keep=false if you want a complete wipe including certs.
+crds:
+  enabled: true
+  keep: true
+
+# ── Replica count ────────────────────────────────────────────────────────────
+# 1 is correct for a single-node k3s cluster.
+# Increase to 2 if you add nodes.
+replicaCount: 1
+
+# ── Feature gates ────────────────────────────────────────────────────────────
+# cert-manager 1.15+ has Gateway API support promoted to beta.
+#
+# ExperimentalGatewayAPISupport is enabled by default in cert-manager 1.20,
+# but we explicitly keep it enabled here for clarity and future-proofing.
+featureGates: "ExperimentalGatewayAPISupport=true"
+
+# ── Gateway API integration ──────────────────────────────────────────────────
+# IMPORTANT:
+# This is separate from the ExperimentalGatewayAPISupport feature gate.
+#
+# Gateway API CRDs are already installed in the cluster:
+#   gateways.gateway.networking.k8s.io
+#   httproutes.gateway.networking.k8s.io
+#
+# Enabling this causes cert-manager to initialize its Gateway API integration
+# and allows the ACME HTTP-01 solver to create temporary HTTPRoutes.
+
+config:
+  apiVersion: controller.config.cert-manager.io/v1alpha1
+  kind: ControllerConfiguration
+  enableGatewayAPI: true
+
+
+# ── Controller (main cert-manager pod) ───────────────────────────────────────
+nodeSelector:
+  kubernetes.io/os: linux
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+# ── Webhook ──────────────────────────────────────────────────────────────────
+# Validates and mutates Certificate, CertificateRequest,
+# and Issuer resources.
+webhook:
+  replicaCount: 1
+  timeoutSeconds: 10
+
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── CA Injector ──────────────────────────────────────────────────────────────
+# Injects CA bundles into webhook configurations and CRD conversion webhooks.
+# Must remain enabled.
+cainjector:
+  enabled: true
+  replicaCount: 1
+
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Startup API check ────────────────────────────────────────────────────────
+# One-shot Job that probes the cert-manager API after install/upgrade.
+#
+# Keep enabled — this allows Helm --wait/--atomic to verify cert-manager
+# is actually ready.
+startupapicheck:
+  enabled: true
+
+  nodeSelector:
+    kubernetes.io/os: linux
+
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ── Prometheus metrics ───────────────────────────────────────────────────────
+# Disabled — no Prometheus stack installed.
+prometheus:
+  enabled: false
+
+# ── Log level ────────────────────────────────────────────────────────────────
+# 2 = standard info logging.
+# Set to 4-6 when debugging ACME challenge failures.
+# logLevel: 2
+
+# ── Global settings ──────────────────────────────────────────────────────────
+global:
+  # leaderElection namespace must match the install namespace.
+  #
+  # Required even with replicaCount=1 because the controller uses
+  # Kubernetes leader election.
+  leaderElection:
+    namespace: cert-manager
 </file>
 
 <file path=".github/workflows/helm-cd.yaml">
@@ -2939,6 +3403,24 @@ jobs:
             https://github.com/mikefarah/yq/releases/download/v4.44.3/yq_linux_amd64
           chmod +x /usr/local/bin/yq
           yq --version
+
+      - name: Render cert-manager chart for debugging
+        run: |
+          helm template cert-manager \
+            oci://quay.io/jetstack/charts/cert-manager \
+            --version v1.20.2 \
+            --namespace cert-manager \
+            -f helm/platform/cert-manager/values.yaml \
+            > /tmp/cert-manager-rendered.yaml
+
+          echo "=== ConfigMap ==="
+          grep -n -A40 -B10 "kind: ConfigMap" /tmp/cert-manager-rendered.yaml || true
+
+          echo "=== config.yaml references ==="
+          grep -n -A20 -B20 "config.yaml" /tmp/cert-manager-rendered.yaml || true
+
+          echo "=== controller args ==="
+          grep -n -A30 -B10 "cert-manager-controller" /tmp/cert-manager-rendered.yaml || true
 
       - name: Add Helm repos
         # cert-manager + envoy-gateway use OCI registries — no repo add needed
@@ -3356,443 +3838,6 @@ jobs:
           echo " CERTIFICATES (all namespaces)"
           echo "════════════════════════════════════"
           kubectl get certificate -A 2>/dev/null || echo "(none)"
-</file>
-
-<file path=".github/workflows/infrastructure-deploy.yaml">
----
-name: Infrastructure Deploy (CD)
-on:
-  push:
-    branches:
-      - main
-    paths:
-      - "opentofu/**"
-      - "ansible/**"
-  workflow_dispatch:
-jobs:
-  ############################################################
-  # 0. CHANGE DETECTION
-  ############################################################
-  changes:
-    name: Detect Change Type
-    runs-on: ubuntu-latest
-    outputs:
-      tofu: ${{ steps.filter.outputs.tofu }}
-      k3s_config: ${{ steps.filter.outputs.k3s_config }}
-      k3s_version: ${{ steps.filter.outputs.k3s_version }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-      - name: Detect changed files
-        id: filter
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tofu=true" >> $GITHUB_OUTPUT
-            echo "k3s_config=true" >> $GITHUB_OUTPUT
-            echo "k3s_version=true" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          CHANGED=$(git diff --name-only HEAD^ HEAD)
-          echo "$CHANGED"
-          if echo "$CHANGED" | grep -q "^opentofu/"; then
-            echo "tofu=true" >> $GITHUB_OUTPUT
-          else
-            echo "tofu=false" >> $GITHUB_OUTPUT
-          fi
-          K3S_CHANGED=false
-          K3S_PATTERN="^ansible/(roles/k3s/|playbooks/k3s-config-rollout"
-          K3S_PATTERN="${K3S_PATTERN}\.yml|roles/k3s/templates/|roles/k3s/defaults/)"
-          if echo "$CHANGED" | grep -Eq "$K3S_PATTERN"; then
-            K3S_CHANGED=true
-          fi
-          echo "k3s_config=$K3S_CHANGED" >> $GITHUB_OUTPUT
-          K3S_VERSION_CHANGED=false
-          K3S_VER_PATH="^ansible/roles/k3s/defaults/main.yaml"
-          if echo "$CHANGED" | grep -q "$K3S_VER_PATH"; then
-            K3S_VERSION_CHANGED=true
-          fi
-          echo "k3s_version=$K3S_VERSION_CHANGED" >> $GITHUB_OUTPUT
-  ############################################################
-  # 1. OPEN TOFU PLAN
-  ############################################################
-  plan:
-    if: needs.changes.outputs.tofu == 'true'
-    name: OpenTofu Plan
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: opentofu/setup-opentofu@v1
-      - name: Create OCI API Key File
-        run: |
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
-          chmod 600 oci_api_key.pem
-      - name: Init
-        run: |
-          tofu init -input=false -reconfigure
-      - name: Plan
-        env:
-          TF_VAR_tenancy_ocid: ${{ secrets.OCI_TENANCY_OCID }}
-          TF_VAR_user_ocid: ${{ secrets.OCI_USER_OCID }}
-          TF_VAR_fingerprint: ${{ secrets.OCI_FINGERPRINT }}
-          TF_VAR_region: ${{ secrets.OCI_REGION }}
-          TF_VAR_compartment_ocid: ${{ secrets.OCI_COMPARTMENT_OCID }}
-          TF_VAR_private_key_path: oci_api_key.pem
-          TF_VAR_ssh_public_key: ${{ secrets.OCI_SSH_PUBLIC_KEY }}
-        run: tofu plan -out=tfplan
-      - name: Upload Plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: tofu-plan
-          path: opentofu/environments/lab/tfplan
-  ############################################################
-  # 2. OPEN TOFU APPLY
-  ############################################################
-  apply:
-    if: needs.changes.outputs.tofu == 'true'
-    name: OpenTofu Apply
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - plan
-    environment:
-      name: lab
-    defaults:
-      run:
-        working-directory: opentofu/environments/lab
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: opentofu/setup-opentofu@v1
-      - name: Create OCI API Key File
-        run: |
-          echo "${{ secrets.OCI_PRIVATE_KEY }}" > oci_api_key.pem
-          chmod 600 oci_api_key.pem
-      - name: Init
-        run: |
-          tofu init -input=false -reconfigure
-      - name: Download Plan
-        uses: actions/download-artifact@v4
-        with:
-          name: tofu-plan
-          path: opentofu/environments/lab
-      - name: Apply
-        run: |
-          tofu apply -auto-approve tfplan
-  ############################################################
-  # 3. GENERATE INVENTORY
-  ############################################################
-  inventory:
-    if: |
-      always() &&
-      needs.changes.result == 'success' &&
-      (
-        needs.changes.outputs.tofu == 'true' ||
-        needs.changes.outputs.k3s_config == 'true'
-      ) &&
-      (
-        needs.apply.result == 'success' ||
-        needs.apply.result == 'skipped'
-      )
-    name: Generate Inventory
-    runs-on: ubuntu-latest
-    needs:
-      - changes
-      - apply
-    outputs:
-      vm_ip: ${{ steps.extract.outputs.vm_ip }}
-      tofu: ${{ needs.changes.outputs.tofu }}
-      k3s_config: ${{ needs.changes.outputs.k3s_config }}
-      k3s_version: ${{ needs.changes.outputs.k3s_version }}
-    env:
-      AWS_ACCESS_KEY_ID: ${{ secrets.OCI_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.OCI_SECRET_ACCESS_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: opentofu/setup-opentofu@v1
-      - name: Init
-        working-directory: opentofu/environments/lab
-        run: |
-          tofu init -input=false -reconfigure
-      - name: Extract IP
-        id: extract
-        working-directory: opentofu/environments/lab
-        run: |
-          IP=$(tofu output -raw public_ip)
-          echo "vm_ip=$IP" >> $GITHUB_OUTPUT
-      - name: Create inventory
-        run: |
-          mkdir -p inventory
-          echo "[k3s]" > inventory/hosts.ini
-          VM_IP="${{ steps.extract.outputs.vm_ip }}"
-          echo "$VM_IP ansible_user=ubuntu" >> inventory/hosts.ini
-      - name: Upload Inventory
-        uses: actions/upload-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory/hosts.ini
-  ############################################################
-  # 4. FULL ANSIBLE BOOTSTRAP
-  ############################################################
-  ansible:
-    if: |
-      always() &&
-      needs.inventory.result == 'success' &&
-      (
-        needs.inventory.outputs.tofu == 'true' ||
-        needs.inventory.outputs.k3s_version == 'true'
-      )
-    name: Run Full Ansible Bootstrap
-    runs-on: ubuntu-latest
-    needs:
-      - inventory
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-ansible
-      - name: Install Ansible
-        run: |
-          python3 -m pip install --upgrade pip
-          pip3 install ansible ansible-lint
-      - name: Collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-      - name: SSH key
-        run: |
-          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
-          chmod 600 key.pem
-      - name: Run site playbook
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: False
-        run: |
-          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
-          ansible-playbook \
-          -i inventory/hosts.ini \
-          ansible/playbooks/site.yml \
-          --private-key key.pem
-  ############################################################
-  # 5. K3S CONFIG ONLY ROLLOUT
-  ############################################################
-  config-rollout:
-    if: |
-      always() &&
-      needs.inventory.result == 'success' &&
-      needs.inventory.outputs.k3s_config == 'true' &&
-      (needs.ansible.result == 'success' || needs.ansible.result == 'skipped')
-    name: K3s Config Rollout
-    runs-on: ubuntu-latest
-    needs:
-      - inventory
-      - ansible
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: ansible-inventory
-          path: inventory
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-ansible
-      - name: Install Ansible
-        run: |
-          python3 -m pip install --upgrade pip
-          pip3 install ansible
-      - name: Install Collections
-        run: |
-          ansible-galaxy collection install community.general
-          ansible-galaxy collection install ansible.posix
-      - name: SSH Key
-        run: |
-          echo "${{ secrets.OCI_SSH_PRIVATE_KEY }}" > key.pem
-          chmod 600 key.pem
-      - name: Run K3s Config Rollout
-        env:
-          ANSIBLE_HOST_KEY_CHECKING: False
-        run: |
-          ANSIBLE_CONFIG=$PWD/ansible/ansible.cfg \
-          ansible-playbook \
-          -i inventory/hosts.ini \
-          ansible/playbooks/k3s-config-rollout.yml \
-          --private-key key.pem
-</file>
-
-<file path="repo_structure.txt">
-Folder PATH listing for volume Data
-Volume serial number is 0000001A C87A:83A4
-D:.
-|   .gitignore
-|   .pre-commit-config.yaml
-|   repomix-output.xml
-|   repo_structure.txt
-|   
-+---.github
-|   \---workflows
-|           ansible-ci.yaml
-|           helm-cd.yaml
-|           helm-ci.yaml
-|           infrastructure-deploy.yaml
-|           opentofu-ci.yaml
-|           security-ci.yaml
-|           
-+---ansible
-|   |   ansible.cfg
-|   |   requirements.yml
-|   |   
-|   +---inventories
-|   |   +---dev
-|   |   \---lab
-|   |       |   hosts.ini
-|   |       |   
-|   |       \---group_vars
-|   |               all.yml
-|   |               
-|   +---playbooks
-|   |       k3s-bootstrap.yml
-|   |       k3s-config-rollout.yml
-|   |       os-bootstrap.yml
-|   |       os-rollback.yml
-|   |       site.yml
-|   |       
-|   \---roles
-|       +---k3s
-|       |   +---defaults
-|       |   |       main.yaml
-|       |   |       
-|       |   +---handlers
-|       |   |       main.yaml
-|       |   |       
-|       |   +---tasks
-|       |   |       cleanup.yaml
-|       |   |       config-rollout.yaml
-|       |   |       install.yaml
-|       |   |       kubeconfig.yaml
-|       |   |       logging.yaml
-|       |   |       main.yaml
-|       |   |       prereqs.yaml
-|       |   |       storage.yaml
-|       |   |       validate_disk.yaml
-|       |   |       
-|       |   \---templates
-|       |           config.yaml.j2
-|       |           
-|       \---os-bootstrap
-|           \---tasks
-|                   fail2ban.yml
-|                   firewall.yml
-|                   main.yml
-|                   packages.yml
-|                   ssh.yml
-|                   sysctl.yml
-|                   
-+---docs
-|   \---Test
-|           Test_prompts.txt
-|           
-+---helm
-|   +---applications
-|   +---infrastructure
-|   |   +---cert-config
-|   |   |       certificate-gateway-default.yaml
-|   |   |       clusterissuer-letsencrypt-prod.yaml
-|   |   |       clusterissuer-letsencrypt-staging.yaml
-|   |   |       
-|   |   \---gateway-config
-|   |           gateway.yaml
-|   |           gatewayclass.yaml
-|   |           httproute-redirect.yaml
-|   |           
-|   \---platform
-|       +---cert-manager
-|       |       helmrelease.yaml
-|       |       namespace.yaml
-|       |       values.yaml
-|       |       
-|       \---envoy-gateway
-|               helmrelease.yaml
-|               namespace.yaml
-|               values.yaml
-|               
-\---opentofu
-    +---bootstrap
-    |   \---state-backend
-    |       |   .terraform.lock.hcl
-    |       |   bootstrap.tfplan
-    |       |   bootstrap.tfvars
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   terraform.tfstate
-    |       |   terraform.tfstate.backup
-    |       |   variables.tf
-    |       |   
-    |       +---.terraform
-    |       |   \---providers
-    |       |       \---registry.opentofu.org
-    |       |           \---oracle
-    |       |               \---oci
-    |       |                   \---8.17.0
-    |       |                       |   windows_amd64.lock
-    |       |                       |   
-    |       |                       \---windows_amd64
-    |       |                               terraform-provider-oci_v8.17.0
-    |       |                               
-    |       \---scripts
-    |               apply.sh
-    |               destroy.sh
-    |               init.sh
-    |               plan.sh
-    |               
-    +---environments
-    |   +---dev
-    |   \---lab
-    |       |   .terraform.lock.hcl
-    |       |   backend.tf
-    |       |   lab.tfplan
-    |       |   main.tf
-    |       |   outputs.tf
-    |       |   providers.tf
-    |       |   terraform.tfvars
-    |       |   variables.tf
-    |       |   versions.tf
-    |       |   
-    |       \---.terraform
-    |           |   terraform.tfstate
-    |           |   
-    |           \---providers
-    |               \---registry.opentofu.org
-    |                   \---oracle
-    |                       \---oci
-    |                           \---8.15.0
-    |                               |   windows_amd64.lock
-    |                               |   
-    |                               \---windows_amd64
-    |                                       terraform-provider-oci_v8.15.0
-    |                                       
-    +---modules
-    \---scripts
-            apply.sh
-            destroy.sh
-            init.sh
-            plan.sh
-            retry-apply.sh
 </file>
 
 <file path="ansible/roles/k3s/tasks/config-rollout.yaml">
