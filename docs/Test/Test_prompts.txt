@@ -16,3 +16,24 @@ Phase 4 — Vault, migrate secrets off Helm --set
 With Keycloak and your auth broker already running (and already using --set-passed secrets from GitHub Actions), deploy Vault and migrate those existing secrets to it rather than designing Vault integration in the abstract. Real secrets to migrate = a real, motivating first use case for Vault, rather than standing it up with nothing to protect yet.
 Phase 5 — ongoing hardening, layered in per-app going forward
 Image scanning, rate limiting on Keycloak's login endpoint, audit logging, backups — these aren't blocking anything above, so they can run in parallel or trail slightly behind, added as you bring in each real application.
+
+
+
+Run ansible-lint ansible/
+  ansible-lint ansible/
+  shell: /usr/bin/bash -e {0}
+  env:
+    ANSIBLE_CONFIG: /home/runner/work/Zero-Trust-Platform-OCI/Zero-Trust-Platform-OCI/ansible/ansible.cfg
+WARNING  Listing 1 violation(s) that are fatal
+Error: Role name os-bootstrap does not match ``^[a-z][a-z0-9_]*$`` pattern.
+Read documentation for instructions on how to ignore specific rule violations.
+
+# Rule Violation Summary
+
+  1 role-name profile:basic tags:deprecations,metadata
+
+Failed: 1 failure(s), 0 warning(s) in 27 files processed of 30 encountered. Last profile that met the validation criteria was 'min'.
+role-name: Role name os-bootstrap does not match ``^[a-z][a-z0-9_]*$`` pattern.
+ansible/roles/os-bootstrap:1
+
+Error: Process completed with exit code 2.
