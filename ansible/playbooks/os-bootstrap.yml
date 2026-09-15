@@ -6,4 +6,4 @@
   become: true
 
   roles:
-    - os-bootstrap
+    - os_bootstrap

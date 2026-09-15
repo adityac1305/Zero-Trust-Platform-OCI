@@ -4,6 +4,7 @@ tls-san:
   - "{{ ansible_host }}"
 
 data-dir: "{{ k3s_config.data_dir }}"
+secrets-encryption: {{ k3s_config.secrets_encryption }}
 
 disable:
 {% for item in k3s_config.disable %}
